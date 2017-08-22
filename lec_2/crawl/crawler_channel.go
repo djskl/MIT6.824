@@ -1,8 +1,10 @@
-package main
+package crawl
 
-import "fmt"
+import (
+	"fmt"
+)
 
-func CrawlSerial(url string, fetcher Fetcher, fetched map[string]bool)  {
+func CrawlChannel(url string, fetcher Fetcher, fetched map[string]bool)  {
 	if fetched[url] {
 		return
 	}
@@ -22,9 +24,5 @@ func CrawlSerial(url string, fetcher Fetcher, fetched map[string]bool)  {
 	}
 
 	return
-}
-
-func main() {
-	CrawlSerial("http://golang.org/", fakeFetcher, make(map[string]bool))
 }
 

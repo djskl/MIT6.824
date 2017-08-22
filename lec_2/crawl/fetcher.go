@@ -1,6 +1,8 @@
-package main
+package crawl
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type Fetcher interface  {
 	Fetch(url string)(body string, urls []string, err error)
@@ -17,10 +19,10 @@ func (this FakeFetcher) Fetch(url string)(body string, urls []string, err error)
 	if fs, ok := this[url]; ok {
 		return fs.body, fs.urls, nil
 	}
-	return "", nil, fmt.Errorf("not found: %s", url)
+	return "", nil, fmt.Errorf("404: %s", url)
 }
 
-var fakeFetcher = FakeFetcher{
+var MyFetcher = FakeFetcher{
 	"http://golang.org/": &FetchResult{
 		"The Go Programming Language",
 		[]string{
