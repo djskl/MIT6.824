@@ -1,7 +1,7 @@
 package main
 
-import "MIT6.824/lec_2"
+import "MIT6.824/lec_2/crawl"
 
 func main() {
-	LEC_2.CrawlParallel("http://golang.org/", LEC_2.MyFetcher)
+	crawl.CrawlChannel("http://golang.org/", crawl.MyFetcher)
 }
