@@ -17,13 +17,13 @@ package raft
 //   in the same server.
 //
 
-import "sync"
-import "labrpc"
+import (
+	"sync"
+	"MIT6.824/lec_5&6/labrpc"
+)
 
 // import "bytes"
 // import "encoding/gob"
-
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -37,8 +37,8 @@ type ApplyMsg struct {
 	Snapshot    []byte // ignore for lab2; only used in lab3
 }
 
-type LogItem struct {
-	Term int
+type Entry struct {
+	Term    int
 	Command interface{}
 }
 
@@ -55,15 +55,14 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	currentTerm int
-	votedFor int
-	log []LogItem
+	votedFor    int
+	logs         []Entry
 
 	commitIndex int
 	lastApplied int
 
-	nextIndex []int
+	nextIndex  []int
 	matchIndex []int
-
 }
 
 // return currentTerm and whether this server
@@ -109,13 +108,56 @@ func (rf *Raft) readPersist(data []byte) {
 }
 
 type AppendEntriesArgs struct {
-
+	Term        int
+	LeaderID    int
+	Items       []Entry
+	PreLogTerm  int
+	PreLogIndex int
+	CommitIndex int
 }
 
 type AppendEntriesReply struct {
-
+	Term    int
+	Success bool
 }
 
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return
+	}
+
+	rf.currentTerm = args.Term
+	reply.Term = args.Term
+
+	preLogIdx := args.PreLogIndex
+	if preLogIdx == len(rf.logs) {
+		for _, item := range(args.Items) {
+			rf.logs = append(rf.logs, item)
+		}
+		reply.Success = true
+		return
+	}
+
+	if preLogIdx > len(rf.logs) {
+		reply.Success = false
+		return
+	}
+
+	preLogEntry := rf.logs[args.PreLogIndex]
+	if preLogEntry.Term != args.PreLogTerm {
+		reply.Success = false
+		return
+	}
+
+	rf.logs = rf.logs[:args.PreLogIndex+1]
+	for _, item := range(rf.logs) {
+		rf.logs = append(rf.logs, item)
+	}
+	reply.Success = true
+	return
+}
 
 //
 // example RequestVote RPC arguments structure.
@@ -123,12 +165,10 @@ type AppendEntriesReply struct {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term int
-
+	Term         int
 	CandidateIdx int
-
 	LastLogIndex int
-	LastLogTerm int
+	LastLogTerm  int
 }
 
 //
@@ -137,12 +177,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	Term int
+	Term        int
 	VoteGranted bool
-}
-
-func (rf *Raft) AppendEntries() {
-
 }
 
 //
@@ -165,8 +201,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.currentTerm = args.Term
 	reply.Term = args.Term
 
-	lastLogIndex := len(rf.log)-1
-	lastLog := rf.log[lastLogIndex]
+	lastLogIndex := len(rf.logs) - 1
+	lastLog := rf.logs[lastLogIndex]
 	lastLogTerm := lastLog.Term
 
 	if args.LastLogTerm > lastLogTerm {
@@ -223,7 +259,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -243,7 +278,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -277,15 +311,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	go func() {
-		for {
 
-		}
-	}()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
