@@ -20,6 +20,8 @@ package raft
 import (
 	"sync"
 	"MIT6.824/lec_5&6/labrpc"
+	"time"
+	"math/rand"
 )
 
 // import "bytes"
@@ -56,13 +58,15 @@ type Raft struct {
 	// state a Raft server must maintain.
 	currentTerm int
 	votedFor    int
-	logs         []Entry
+	logs        []Entry
 
 	commitIndex int
 	lastApplied int
 
 	nextIndex  []int
 	matchIndex []int
+
+	expire_ch chan bool
 }
 
 // return currentTerm and whether this server
@@ -133,7 +137,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	preLogIdx := args.PreLogIndex
 	if preLogIdx == len(rf.logs) {
-		for _, item := range(args.Items) {
+		for _, item := range (args.Items) {
 			rf.logs = append(rf.logs, item)
 		}
 		reply.Success = true
@@ -152,11 +156,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	rf.logs = rf.logs[:args.PreLogIndex+1]
-	for _, item := range(rf.logs) {
+	for _, item := range (rf.logs) {
 		rf.logs = append(rf.logs, item)
 	}
 	reply.Success = true
 	return
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	//todo
 }
 
 //
@@ -311,7 +319,49 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.expire_ch = make(chan bool)
+	go func() {
+		timeout_loop:
+		for {
+			rand_timeout := 300 + rand.Intn(200)
+			select {
+			case <-rf.expire_ch:
+				break
+			case <-time.After(time.Millisecond*time.Duration(rand_timeout)):
+				break timeout_loop
+			}
+		}
+		rf.votedFor = rf.me
 
+		lastLogIdx := len(rf.logs)-1
+		lastEntry := rf.logs[lastLogIdx]
+		lastLogItem := lastEntry.Term
+
+		voteArgs := &RequestVoteArgs{
+			rf.currentTerm,
+			rf.me,
+			lastLogIdx,
+			lastLogItem,
+		}
+
+		all_votes := 1
+		for idx, _ := range rf.peers {
+			if idx == rf.me {
+				continue
+			}
+			go func() {
+				voteReply := &RequestVoteReply{}
+				rf.sendRequestVote(idx, voteArgs, voteReply)
+				if voteReply.VoteGranted {
+					all_votes += 1
+					if all_votes > len(rf.peers)/2 {
+
+					}
+				}
+			}()
+		}
+
+	}()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
