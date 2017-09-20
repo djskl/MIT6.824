@@ -19,9 +19,10 @@ package raft
 
 import (
 	"sync"
-	"MIT6.824/lec_5&6/labrpc"
+	"labrpc"
 	"time"
 	"math/rand"
+	"math"
 )
 
 // import "bytes"
@@ -76,6 +77,8 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	if rf.votedFor == rf.me {
 		isleader = true
+	}else{
+		isleader = false
 	}
 	return rf.currentTerm, isleader
 }
@@ -113,10 +116,10 @@ func (rf *Raft) readPersist(data []byte) {
 
 type AppendEntriesArgs struct {
 	Term        int
-	LeaderID    int
 	Items       []Entry
 	PreLogTerm  int
 	PreLogIndex int
+	LeaderID    int
 	CommitIndex int
 }
 
@@ -132,14 +135,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	rf.votedFor = args.LeaderID
+
 	rf.currentTerm = args.Term
 	reply.Term = args.Term
-
 	preLogIdx := args.PreLogIndex
-	if preLogIdx == len(rf.logs) {
-		for _, item := range (args.Items) {
-			rf.logs = append(rf.logs, item)
-		}
+
+	if preLogIdx == -1 {
 		reply.Success = true
 		return
 	}
@@ -155,16 +157,60 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	rf.logs = rf.logs[:args.PreLogIndex+1]
-	for _, item := range (rf.logs) {
-		rf.logs = append(rf.logs, item)
+	if preLogIdx == len(rf.logs) {
+		for _, item := range (args.Items) {
+			rf.logs = append(rf.logs, item)
+		}
+	} else {
+		rf.logs = rf.logs[:args.PreLogIndex+1]
+		for _, item := range (rf.logs) {
+			rf.logs = append(rf.logs, item)
+		}
 	}
 	reply.Success = true
-	return
+
+	rf.commitIndex = int(math.Min(float64(args.CommitIndex), float64(len(rf.logs))))
+
 }
 
-func (rf *Raft) sendAppendEntries(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	//todo
+func (rf *Raft) sendAppendEntries() {
+	for server, _ := range rf.peers {
+		go func() {
+			for {
+				nx := rf.nextIndex[server]
+				preLogTerm := 0
+				preLogIndex := -1
+				toEntries := []Entry{}
+				if nx > 1 {
+					preLogIndex = nx - 1
+					preLog := rf.logs[preLogIndex]
+					preLogTerm = preLog.Term
+					toEntries = rf.logs[nx:]
+				}
+				args := &AppendEntriesArgs{
+					rf.currentTerm,
+					toEntries,
+					preLogTerm,
+					preLogIndex,
+					rf.me,
+					rf.commitIndex,
+				}
+				reply := &AppendEntriesReply{}
+				ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+				if ok && reply.Success {
+					rf.nextIndex[server] += len(toEntries)
+					rf.matchIndex[server] = rf.nextIndex[server] - 1
+					//更新rf.commitIndex
+				}
+
+				if ok {
+					time.Sleep(100 * time.Millisecond)
+				}else{
+					continue
+				}
+			}
+		}()
+	}
 }
 
 //
@@ -200,7 +246,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	if rf.votedFor != -1 && rf.votedFor != args.CandidateIdx {
+	//在当前term内，已经投票后，就不能再给其他节点投票了
+	if args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateIdx {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -209,9 +256,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.currentTerm = args.Term
 	reply.Term = args.Term
 
+	lastLogTerm := 0
 	lastLogIndex := len(rf.logs) - 1
-	lastLog := rf.logs[lastLogIndex]
-	lastLogTerm := lastLog.Term
+	if lastLogIndex > -1 {
+		lastLogTerm = rf.logs[lastLogIndex].Term
+	}
 
 	if args.LastLogTerm > lastLogTerm {
 		reply.VoteGranted = true
@@ -219,12 +268,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	if args.LastLogTerm < lastLogTerm {
-		reply.VoteGranted = false
-		return
-	}
-
-	if args.LastLogIndex < lastLogIndex {
+	if args.LastLogTerm < lastLogTerm || args.LastLogIndex < lastLogIndex {
 		reply.VoteGranted = false
 		return
 	}
@@ -317,25 +361,34 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.votedFor = -1
+
+	rf.matchIndex = make([]int, len(rf.peers))
+	rf.nextIndex = make([]int, len(rf.peers))
+	for idx:=0;idx<len(rf.peers);idx++{
+		rf.nextIndex[idx] = 1
+	}
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.expire_ch = make(chan bool)
 	go func() {
-		timeout_loop:
+	timeout_loop:
 		for {
 			rand_timeout := 300 + rand.Intn(200)
 			select {
 			case <-rf.expire_ch:
 				break
-			case <-time.After(time.Millisecond*time.Duration(rand_timeout)):
+			case <-time.After(time.Millisecond * time.Duration(rand_timeout)):
 				break timeout_loop
 			}
 		}
 		rf.votedFor = rf.me
+		lastLogItem := 0
+		lastLogIdx := len(rf.logs) - 1
 
-		lastLogIdx := len(rf.logs)-1
-		lastEntry := rf.logs[lastLogIdx]
-		lastLogItem := lastEntry.Term
+		if lastLogIdx > -1 {
+			lastLogItem = rf.logs[lastLogIdx].Term
+		}
 
 		voteArgs := &RequestVoteArgs{
 			rf.currentTerm,
@@ -355,7 +408,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				if voteReply.VoteGranted {
 					all_votes += 1
 					if all_votes > len(rf.peers)/2 {
-
+						rf.sendAppendEntries()
 					}
 				}
 			}()

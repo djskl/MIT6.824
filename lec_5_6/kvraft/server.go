@@ -4,8 +4,8 @@ import (
 	"log"
 	"sync"
 	"encoding/gob"
-	"MIT6.824/lec_5&6/raft"
-	"MIT6.824/lec_5&6/labrpc"
+	"raft"
+	"labrpc"
 )
 
 const Debug = 0
