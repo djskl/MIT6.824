@@ -68,6 +68,7 @@ type Raft struct {
 	matchIndex []int
 
 	expire_ch chan bool
+	votes     int
 }
 
 // return currentTerm and whether this server
@@ -75,10 +76,8 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (2A).
-	if rf.votedFor == rf.me {
+	if rf.votes > len(rf.peers)/2 {
 		isleader = true
-	}else{
-		isleader = false
 	}
 	return rf.currentTerm, isleader
 }
@@ -135,7 +134,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	rf.votedFor = args.LeaderID
+	if args.LeaderID != rf.me {
+		rf.votes = 0
+		rf.votedFor = args.LeaderID
+	}
+	rf.expire_ch <- true
 
 	rf.currentTerm = args.Term
 	reply.Term = args.Term
@@ -175,6 +178,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 func (rf *Raft) sendAppendEntries() {
 	for server, _ := range rf.peers {
+		if server == rf.me {
+			continue
+		}
 		go func() {
 			for {
 				nx := rf.nextIndex[server]
@@ -205,7 +211,7 @@ func (rf *Raft) sendAppendEntries() {
 
 				if ok {
 					time.Sleep(100 * time.Millisecond)
-				}else{
+				} else {
 					continue
 				}
 			}
@@ -365,7 +371,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.nextIndex = make([]int, len(rf.peers))
-	for idx:=0;idx<len(rf.peers);idx++{
+	for idx := 0; idx < len(rf.peers); idx++ {
 		rf.nextIndex[idx] = 1
 	}
 
@@ -382,7 +388,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				break timeout_loop
 			}
 		}
+
+		rf.votes = 1
+		rf.currentTerm += 1
 		rf.votedFor = rf.me
+
 		lastLogItem := 0
 		lastLogIdx := len(rf.logs) - 1
 
@@ -397,17 +407,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			lastLogItem,
 		}
 
-		all_votes := 1
 		for idx, _ := range rf.peers {
 			if idx == rf.me {
 				continue
 			}
 			go func() {
 				voteReply := &RequestVoteReply{}
-				rf.sendRequestVote(idx, voteArgs, voteReply)
+
+				for {
+					ok := rf.sendRequestVote(idx, voteArgs, voteReply)
+					if ok || rf.votedFor != me {
+						break
+					}
+				}
+
 				if voteReply.VoteGranted {
-					all_votes += 1
-					if all_votes > len(rf.peers)/2 {
+					rf.votes += 1
+					if rf.votes == len(rf.peers)/2+1 {
 						rf.sendAppendEntries()
 					}
 				}
