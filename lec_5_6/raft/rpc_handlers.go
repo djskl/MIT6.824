@@ -27,7 +27,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if args.LeaderID != rf.me {
-		rf.votes = 0
+		rf.resetVotes()
 		rf.votedFor = args.LeaderID
 	}
 	rf.expire_ch <- true
@@ -99,9 +99,7 @@ func (rf *Raft) sendAppendEntries() {
 				reply := &AppendEntriesReply{}
 				ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 				if ok && reply.Success {
-					rf.nextIndex[server] += len(toEntries)
-					rf.matchIndex[server] = rf.nextIndex[server] - 1
-					//更新rf.commitIndex
+					rf.updateIndex(server, len(toEntries))
 				}
 
 				if ok {

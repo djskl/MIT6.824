@@ -70,6 +70,30 @@ type Raft struct {
 	votes     int
 }
 
+func (rf *Raft) updateIndex(serverIdx int, size int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.nextIndex[serverIdx] += size
+	idx := rf.nextIndex[serverIdx] - 1
+	rf.matchIndex[serverIdx] = idx
+
+	for idx > -1 {
+		nums := 0
+		for s, _ := range rf.peers {
+			if rf.matchIndex[s] >= idx {
+				nums += 1
+			}
+		}
+		if nums > len(rf.peers) {
+			rf.commitIndex = idx
+			break
+		}
+		idx--
+	}
+
+}
+
 func (rf *Raft) getCurrentTerm() int {
 	rf.mu.RLock()
 	defer rf.mu.RUnlock()
