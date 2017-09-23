@@ -22,6 +22,7 @@ import (
 	"labrpc"
 	"time"
 	"math/rand"
+	"fmt"
 )
 
 // import "bytes"
@@ -68,18 +69,32 @@ type Raft struct {
 
 	expCh chan bool
 	apdCh chan bool
+	apyCh chan ApplyMsg
 
-	votes     int
+	votes int
 }
 
-func (rf *Raft) addLogEntry(entry Entry) int {
+func (rf *Raft) updateServerIndex(leaderCmtIdx int, size int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.logs = append(rf.logs, entry)
-	return len(rf.logs) - 1
+
+	if leaderCmtIdx > size {
+		rf.commitIndex = size - 1
+	} else {
+		rf.commitIndex = leaderCmtIdx
+	}
+
+	go func() {
+		for rf.lastApplied < rf.commitIndex {
+			toIdx := rf.lastApplied + 1
+			logEntry := rf.logs[toIdx]
+			rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
+			rf.lastApplied = toIdx
+		}
+	}()
 }
 
-func (rf *Raft) updateIndex(serverIdx int, size int) {
+func (rf *Raft) updateLeaderIndex(serverIdx int, size int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -88,19 +103,44 @@ func (rf *Raft) updateIndex(serverIdx int, size int) {
 	rf.matchIndex[serverIdx] = idx
 
 	for idx > -1 {
+		aEntry := rf.logs[idx]
+		if aEntry.Term != rf.currentTerm {
+			break
+		}
+
 		nums := 0
 		for s, _ := range rf.peers {
 			if rf.matchIndex[s] >= idx {
 				nums += 1
 			}
 		}
-		if nums > len(rf.peers) {
+
+		if nums > len(rf.peers)/2 {
 			rf.commitIndex = idx
 			break
 		}
-		idx--
+
+		idx -= 1
 	}
 
+	go func() {
+		for rf.lastApplied < rf.commitIndex {
+			toIdx := rf.lastApplied + 1
+			logEntry := rf.logs[toIdx]
+			rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
+			rf.lastApplied = toIdx
+		}
+	}()
+}
+
+func (rf *Raft) addLogEntry(entry Entry) int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.logs = append(rf.logs, entry)
+	size := len(rf.logs)
+	rf.nextIndex[rf.me] = size
+	rf.matchIndex[rf.me] = size-1
+	return size-1
 }
 
 func (rf *Raft) getCurrentTerm() int {
@@ -151,6 +191,15 @@ func (rf *Raft) incrNextIndex(server int, deltaNX int) {
 	rf.nextIndex[server] += deltaNX
 }
 
+func (rf *Raft) decrNextIndex(server int, deltaNX int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.nextIndex[server] -= deltaNX
+	if rf.nextIndex[server] < 0 {
+		rf.nextIndex[server] = 0
+	}
+}
+
 func (rf *Raft) requestVotes() {
 	rf.resetVotes()
 	rf.incrVotes()
@@ -176,10 +225,10 @@ func (rf *Raft) requestVotes() {
 		if idx == rf.me {
 			continue
 		}
-		go func() {
+		go func(serverIdx int) {
 			voteReply := &RequestVoteReply{}
 			for {
-				ok := rf.sendRequestVote(idx, voteArgs, voteReply)
+				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
 				if ok || rf.votedFor != rf.me {
 					break
 				}
@@ -187,10 +236,14 @@ func (rf *Raft) requestVotes() {
 			if voteReply.VoteGranted {
 				currentVotes := rf.incrVotes()
 				if currentVotes == len(rf.peers)/2+1 {
+					for idx := 0; idx < len(rf.peers); idx++ {
+						rf.nextIndex[idx] = len(rf.logs)
+						rf.matchIndex[idx] = 0
+					}
 					rf.sendAppendEntries()
 				}
 			}
-		}()
+		}(idx)
 	}
 }
 
@@ -265,9 +318,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	index = rf.addLogEntry(logEntry)
 
-	go func() {
-		rf.apdCh <- true
-	}()
+	fmt.Println("Get Command:", index, command)
 
 	return index, term, isLeader
 }
@@ -300,6 +351,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.votedFor = -1
+	rf.apyCh = applyCh
 
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.nextIndex = make([]int, len(rf.peers))
@@ -313,7 +365,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() {
 	timeout_loop:
 		for {
-			rand_timeout := 300 + rand.Intn(200)
+			rand_timeout := 300 + rand.Intn(300)
 			select {
 			case <-rf.expCh:
 				break

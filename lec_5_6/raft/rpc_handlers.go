@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"math"
 	"time"
 )
 
@@ -30,29 +29,30 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.resetVotes()
 		rf.votedFor = args.LeaderID
 	}
-	rf.expCh <- true
+
+	go func() {
+		rf.expCh <- true
+	}()
 
 	rf.currentTerm = args.Term
 	reply.Term = args.Term
 	preLogIdx := args.PreLogIndex
 
-	if preLogIdx == -1 {
-		reply.Success = true
-		return
-	}
-
-	if preLogIdx > len(rf.logs) {
+	if preLogIdx >= len(rf.logs) {
 		reply.Success = false
 		return
 	}
 
-	preLogEntry := rf.logs[args.PreLogIndex]
-	if preLogEntry.Term != args.PreLogTerm {
-		reply.Success = false
-		return
+	//前缀一致性检查
+	if preLogIdx > -1 && preLogIdx < len(rf.logs) {
+		preLogEntry := rf.logs[args.PreLogIndex]
+		if preLogEntry.Term != args.PreLogTerm {
+			reply.Success = false
+			return
+		}
 	}
 
-	if preLogIdx == len(rf.logs) {
+	if preLogIdx == len(rf.logs)-1 {
 		for _, item := range (args.Items) {
 			rf.logs = append(rf.logs, item)
 		}
@@ -62,55 +62,70 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.logs = append(rf.logs, item)
 		}
 	}
-
 	reply.Success = true
 
-	rf.commitIndex = int(math.Min(float64(args.CommitIndex), float64(len(rf.logs))))
+	rf.updateServerIndex(args.CommitIndex, len(rf.logs))
 
 }
 
 func (rf *Raft) sendAppendEntries() {
+
+	isLeader := true
+
 	for server, _ := range rf.peers {
 
 		if server == rf.me {
 			continue
 		}
 
-		go func() {
-			for {
-				nx := rf.nextIndex[server]
-				preLogTerm := 0
-				preLogIndex := -1
+		go func(serverIdx int) {
+			preLogTerm := 0
+			for isLeader {
+				nx := rf.getNextIndex(serverIdx)
+				px := nx - 1
 				toEntries := []Entry{}
-				if nx > 1 {
-					preLogIndex = nx - 1
-					preLog := rf.logs[preLogIndex]
-					preLogTerm = preLog.Term
+				if len(rf.logs) > nx {
 					toEntries = rf.logs[nx:]
 				}
+
+				if px > -1 && px < len(rf.logs) {
+					preLog := rf.logs[px]
+					preLogTerm = preLog.Term
+				}
+
 				args := &AppendEntriesArgs{
 					rf.currentTerm,
 					toEntries,
 					preLogTerm,
-					preLogIndex,
+					px,
 					rf.me,
 					rf.commitIndex,
 				}
+
 				reply := &AppendEntriesReply{}
-				ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-				if ok && reply.Success {
-					rf.updateIndex(server, len(toEntries))
+				for {
+					ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
+					if ok {
+						break
+					}
 				}
 
-				select {
-				case <-time.After(time.Millisecond*time.Duration(100)):
-					break
-				case <-rf.apdCh:
-					break
+				if reply.Success {
+					rf.updateLeaderIndex(serverIdx, len(toEntries))
+				} else {
+					ctm, led := rf.GetState()
+					isLeader = led && reply.Term <= ctm
+					if isLeader {
+						rf.decrNextIndex(serverIdx, 1)
+					} else {
+						continue
+					}
 				}
+
+				time.Sleep(100 * time.Millisecond)
 
 			}
-		}()
+		}(server)
 	}
 }
 
