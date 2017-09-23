@@ -66,8 +66,17 @@ type Raft struct {
 	nextIndex  []int
 	matchIndex []int
 
-	expire_ch chan bool
+	expCh chan bool
+	apdCh chan bool
+
 	votes     int
+}
+
+func (rf *Raft) addLogEntry(entry Entry) int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.logs = append(rf.logs, entry)
+	return len(rf.logs) - 1
 }
 
 func (rf *Raft) updateIndex(serverIdx int, size int) {
@@ -247,6 +256,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	term, isLeader = rf.GetState()
+	if !isLeader {
+		return index, term, false
+	}
+
+	logEntry := Entry{term, command}
+
+	index = rf.addLogEntry(logEntry)
+
+	go func() {
+		rf.apdCh <- true
+	}()
 
 	return index, term, isLeader
 }
@@ -287,13 +308,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	}
 
 	// Your initialization code here (2A, 2B, 2C).
-	rf.expire_ch = make(chan bool)
+	rf.apdCh = make(chan bool)
+	rf.expCh = make(chan bool)
 	go func() {
 	timeout_loop:
 		for {
 			rand_timeout := 300 + rand.Intn(200)
 			select {
-			case <-rf.expire_ch:
+			case <-rf.expCh:
 				break
 			case <-time.After(time.Millisecond * time.Duration(rand_timeout)):
 				break timeout_loop

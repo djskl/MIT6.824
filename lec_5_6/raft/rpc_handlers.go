@@ -30,7 +30,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.resetVotes()
 		rf.votedFor = args.LeaderID
 	}
-	rf.expire_ch <- true
+	rf.expCh <- true
 
 	rf.currentTerm = args.Term
 	reply.Term = args.Term
@@ -102,11 +102,13 @@ func (rf *Raft) sendAppendEntries() {
 					rf.updateIndex(server, len(toEntries))
 				}
 
-				if ok {
-					time.Sleep(100 * time.Millisecond)
-				} else {
-					continue
+				select {
+				case <-time.After(time.Millisecond*time.Duration(100)):
+					break
+				case <-rf.apdCh:
+					break
 				}
+
 			}
 		}()
 	}
