@@ -2,6 +2,7 @@ package raft
 
 import (
 	"time"
+	"fmt"
 )
 
 type AppendEntriesArgs struct {
@@ -25,14 +26,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	rf.resetTimeOut()
+
 	if args.LeaderID != rf.me {
 		rf.resetVotes()
 		rf.votedFor = args.LeaderID
 	}
-
-	go func() {
-		rf.expCh <- true
-	}()
 
 	rf.currentTerm = args.Term
 	reply.Term = args.Term
@@ -52,20 +51,27 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 
+	t := false
 	if preLogIdx == len(rf.logs)-1 {
 		for _, item := range (args.Items) {
+			t = true
 			rf.logs = append(rf.logs, item)
 		}
 	} else {
 		rf.logs = rf.logs[:args.PreLogIndex+1]
-		for _, item := range (rf.logs) {
+		for _, item := range (args.Items) {
+			t = true
 			rf.logs = append(rf.logs, item)
 		}
 	}
 	reply.Success = true
 
-	rf.updateServerIndex(args.CommitIndex, len(rf.logs))
+	if t {
+		fmt.Println(rf.me, rf.currentTerm, "NEW", args.Items)
+		fmt.Println(rf.me, rf.currentTerm, "NOW", rf.logs)
+	}
 
+	rf.updateServerIndex(args.CommitIndex, len(rf.logs))
 }
 
 func (rf *Raft) sendAppendEntries() {
@@ -114,7 +120,15 @@ func (rf *Raft) sendAppendEntries() {
 					rf.updateLeaderIndex(serverIdx, len(toEntries))
 				} else {
 					ctm, led := rf.GetState()
-					isLeader = led && reply.Term <= ctm
+					if ctm < reply.Term {
+						isLeader = false
+						rf.resetVotes()
+						rf.votedFor = -1
+						rf.currentTerm = reply.Term
+						return
+					}
+
+					isLeader = led
 					if isLeader {
 						rf.decrNextIndex(serverIdx, 1)
 					} else {

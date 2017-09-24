@@ -19,10 +19,10 @@ package raft
 
 import (
 	"sync"
-	"labrpc"
 	"time"
 	"math/rand"
 	"fmt"
+	"MIT6.824/lec_5_6/labrpc"
 )
 
 // import "bytes"
@@ -72,6 +72,52 @@ type Raft struct {
 	apyCh chan ApplyMsg
 
 	votes int
+	ot bool
+}
+
+func (rf *Raft) resetTimeOut() {
+	if rf.ot {
+		go func() {
+			select {
+			case rf.expCh <- true:
+				break
+			case <-time.After(time.Second*time.Duration(1)):
+				break
+			}
+		}()
+	}else{
+		rf.startTimeOut()
+	}
+}
+
+func (rf *Raft) stopTimeOut() {
+	rf.ot = false
+	go func() {
+		select {
+		case rf.expCh <- true:
+			break
+		case <-time.After(time.Second*time.Duration(1)):
+			break
+		}
+	}()
+}
+
+func (rf *Raft) startTimeOut() {
+	rf.ot = true
+	go func() {
+	timeout_loop:
+		for rf.ot {
+			rand_timeout := 300 + rand.Intn(300)
+			select {
+			case <-rf.expCh:
+				break
+			case <-time.After(time.Millisecond * time.Duration(rand_timeout)):
+				fmt.Println(rf.me, "/", rf.currentTerm, rand_timeout, "开始竞选...", rf.logs)
+				break timeout_loop
+			}
+		}
+		rf.requestVotes()
+	}()
 }
 
 func (rf *Raft) updateServerIndex(leaderCmtIdx int, size int) {
@@ -104,6 +150,8 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, size int) {
 
 	for idx > -1 {
 		aEntry := rf.logs[idx]
+
+		//不能提交上一个term的日志
 		if aEntry.Term != rf.currentTerm {
 			break
 		}
@@ -221,21 +269,35 @@ func (rf *Raft) requestVotes() {
 		lastLogItem,
 	}
 
+	rf.resetTimeOut()
+
 	for idx, _ := range rf.peers {
 		if idx == rf.me {
 			continue
 		}
 		go func(serverIdx int) {
 			voteReply := &RequestVoteReply{}
+			fmt.Println(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
 			for {
 				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
 				if ok || rf.votedFor != rf.me {
 					break
 				}
 			}
+
+			if voteReply.Term > rf.currentTerm {
+				rf.currentTerm = voteReply.Term
+				rf.resetVotes()
+				rf.votedFor = -1
+				return
+			}
+
 			if voteReply.VoteGranted {
+				fmt.Println(rf.me, rf.currentTerm, "获得1票：", serverIdx)
 				currentVotes := rf.incrVotes()
 				if currentVotes == len(rf.peers)/2+1 {
+					rf.stopTimeOut()
+					fmt.Println(rf.me, rf.currentTerm, "当选", rf.logs)
 					for idx := 0; idx < len(rf.peers); idx++ {
 						rf.nextIndex[idx] = len(rf.logs)
 						rf.matchIndex[idx] = 0
@@ -256,6 +318,11 @@ func (rf *Raft) GetState() (int, bool) {
 	if currentVotes > len(rf.peers)/2 {
 		isleader = true
 	}
+
+	if isleader {
+		rf.sendAppendEntries()
+	}
+
 	return rf.currentTerm, isleader
 }
 
@@ -318,7 +385,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	index = rf.addLogEntry(logEntry)
 
-	fmt.Println("Get Command:", index, command)
+	fmt.Println("Get Command:", rf.me, rf.currentTerm, index, command)
 
 	return index, term, isLeader
 }
@@ -362,19 +429,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.apdCh = make(chan bool)
 	rf.expCh = make(chan bool)
-	go func() {
-	timeout_loop:
-		for {
-			rand_timeout := 300 + rand.Intn(300)
-			select {
-			case <-rf.expCh:
-				break
-			case <-time.After(time.Millisecond * time.Duration(rand_timeout)):
-				break timeout_loop
-			}
-		}
-		rf.requestVotes()
-	}()
+	rf.startTimeOut()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
