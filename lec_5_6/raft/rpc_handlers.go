@@ -168,6 +168,7 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	if args.Term < rf.currentTerm {
+		fmt.Println(rf.me,"拒绝为", args.CandidateIdx, "投票(1)")
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -175,6 +176,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	//在当前term内，已经投票后，就不能再给其他节点投票了
 	if args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateIdx {
+		fmt.Println(rf.me,"拒绝为", args.CandidateIdx, "投票(2)", rf.votedFor)
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -192,6 +194,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.LastLogTerm > lastLogTerm {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateIdx
+		fmt.Println(rf.me,"为", args.CandidateIdx, "投票")
 		return
 	}
 
@@ -200,6 +203,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
+	fmt.Println(rf.me,"为", args.CandidateIdx, "投票")
 	reply.VoteGranted = true
 	rf.votedFor = args.CandidateIdx
 }

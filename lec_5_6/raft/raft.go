@@ -72,7 +72,7 @@ type Raft struct {
 	apyCh chan ApplyMsg
 
 	votes int
-	ot bool
+	ot    bool
 }
 
 func (rf *Raft) checkLeader() bool {
@@ -119,13 +119,10 @@ func (rf *Raft) checkLeader() bool {
 			}
 		}(server)
 	}
-	fmt.Println("监测", rf.me, "是否为leader")
 	select {
 	case <-ok_ch:
-		fmt.Println(rf.me, "是leader")
 		return true
 	case <-fail_ch:
-		fmt.Println(rf.me, "不是leader")
 		return false
 	}
 }
@@ -136,11 +133,11 @@ func (rf *Raft) resetTimeOut() {
 			select {
 			case rf.expCh <- true:
 				break
-			case <-time.After(time.Second*time.Duration(1)):
+			case <-time.After(time.Second * time.Duration(1)):
 				break
 			}
 		}()
-	}else{
+	} else {
 		rf.startTimeOut()
 	}
 }
@@ -151,7 +148,7 @@ func (rf *Raft) stopTimeOut() {
 		select {
 		case rf.expCh <- true:
 			break
-		case <-time.After(time.Second*time.Duration(1)):
+		case <-time.After(time.Second * time.Duration(1)):
 			break
 		}
 	}()
@@ -167,7 +164,7 @@ func (rf *Raft) startTimeOut() {
 			case <-rf.expCh:
 				break
 			case <-time.After(time.Millisecond * time.Duration(rand_timeout)):
-				fmt.Println(rf.me, "/", rf.currentTerm, rand_timeout, "开始竞选...", rf.logs)
+				fmt.Println("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
 				break timeout_loop
 			}
 		}
@@ -242,8 +239,8 @@ func (rf *Raft) addLogEntry(entry Entry) int {
 	rf.logs = append(rf.logs, entry)
 	size := len(rf.logs)
 	rf.nextIndex[rf.me] = size
-	rf.matchIndex[rf.me] = size-1
-	return size-1
+	rf.matchIndex[rf.me] = size - 1
+	return size - 1
 }
 
 func (rf *Raft) getCurrentTerm() int {
@@ -265,7 +262,6 @@ func (rf *Raft) setTerm(term int) {
 func (rf *Raft) getVotes() int {
 	rf.mu.RLock()
 	defer rf.mu.RUnlock()
-	fmt.Println("GET", rf.me, rf.votes)
 	return rf.votes
 }
 
@@ -273,7 +269,6 @@ func (rf *Raft) incrVotes() int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.votes += 1
-	fmt.Println("SET", rf.me, rf.votes)
 	return rf.votes
 }
 
@@ -337,21 +332,22 @@ func (rf *Raft) requestVotes() {
 			fmt.Println(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
 			for {
 				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
-				if ok || rf.votedFor != rf.me {
+				if ok {
 					break
+				}
+				if rf.votedFor != rf.me {
+					return
 				}
 			}
 
 			if voteReply.Term > rf.currentTerm {
 				rf.currentTerm = voteReply.Term
-				fmt.Println("--------2--------")
 				rf.resetVotes()
 				rf.votedFor = -1
 				return
 			}
 
 			if voteReply.VoteGranted {
-				fmt.Println(rf.me, rf.currentTerm, "获得1票：", serverIdx)
 				currentVotes := rf.incrVotes()
 				if currentVotes == len(rf.peers)/2+1 {
 					rf.stopTimeOut()
