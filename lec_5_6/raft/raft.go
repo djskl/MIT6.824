@@ -75,6 +75,58 @@ type Raft struct {
 	ot bool
 }
 
+func (rf *Raft) checkLeader() bool {
+	oks := 1
+	ok_ch := make(chan bool)
+
+	fails := 0
+	fail_ch := make(chan bool)
+	for server, _ := range rf.peers {
+		if server == rf.me {
+			continue
+		}
+		go func(serverIdx int) {
+			nx := rf.getNextIndex(serverIdx)
+			px := nx - 1
+			preLogTerm := 0
+			if px > -1 && px < len(rf.logs) {
+				preLog := rf.logs[px]
+				preLogTerm = preLog.Term
+			}
+
+			args := &AppendEntriesArgs{
+				Term:        rf.currentTerm,
+				PreLogTerm:  preLogTerm,
+				PreLogIndex: px,
+				LeaderID:    rf.me,
+				CommitIndex: rf.commitIndex,
+			}
+			reply := &AppendEntriesReply{}
+			ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
+
+			if !ok || reply.Term > rf.currentTerm {
+				if fails++; fails > len(rf.peers)/2 {
+					fail_ch <- true
+				}
+			} else {
+				if !reply.Success {
+					rf.decrNextIndex(serverIdx, 1)
+				}
+				if oks++; oks > len(rf.peers)/2 {
+					ok_ch <- true
+				}
+			}
+		}(server)
+	}
+
+	select {
+	case <-ok_ch:
+		return true
+	case <-fail_ch:
+		return false
+	}
+}
+
 func (rf *Raft) resetTimeOut() {
 	if rf.ot {
 		go func() {
@@ -107,7 +159,7 @@ func (rf *Raft) startTimeOut() {
 	go func() {
 	timeout_loop:
 		for rf.ot {
-			rand_timeout := 300 + rand.Intn(300)
+			rand_timeout := 100 + rand.Intn(200)
 			select {
 			case <-rf.expCh:
 				break
@@ -315,13 +367,11 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (2A).
 	currentVotes := rf.getVotes()
-	if currentVotes > len(rf.peers)/2 {
-		isleader = true
+	if currentVotes <= len(rf.peers)/2 {
+		return rf.currentTerm, false
 	}
 
-	if isleader {
-		rf.sendAppendEntries()
-	}
+	isleader = rf.checkLeader()
 
 	return rf.currentTerm, isleader
 }
