@@ -119,8 +119,7 @@ func (rf *Raft) sendAppendEntries() {
 				if reply.Success {
 					rf.updateLeaderIndex(serverIdx, len(toEntries))
 				} else {
-					ctm, led := rf.GetState()
-					if ctm < reply.Term {
+					if rf.currentTerm < reply.Term {
 						isLeader = false
 						rf.resetVotes()
 						rf.votedFor = -1
@@ -128,16 +127,14 @@ func (rf *Raft) sendAppendEntries() {
 						return
 					}
 
-					isLeader = led
-					if isLeader {
-						rf.decrNextIndex(serverIdx, 1)
-					} else {
+					if rf.getVotes() <= len(rf.peers)/2 {
 						continue
 					}
+
+					rf.decrNextIndex(serverIdx, 1)
+
 				}
-
 				time.Sleep(100 * time.Millisecond)
-
 			}
 		}(server)
 	}

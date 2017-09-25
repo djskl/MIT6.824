@@ -101,6 +101,7 @@ func (rf *Raft) checkLeader() bool {
 				LeaderID:    rf.me,
 				CommitIndex: rf.commitIndex,
 			}
+
 			reply := &AppendEntriesReply{}
 			ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
 
@@ -118,11 +119,13 @@ func (rf *Raft) checkLeader() bool {
 			}
 		}(server)
 	}
-
+	fmt.Println("监测", rf.me, "是否为leader")
 	select {
 	case <-ok_ch:
+		fmt.Println(rf.me, "是leader")
 		return true
 	case <-fail_ch:
+		fmt.Println(rf.me, "不是leader")
 		return false
 	}
 }
@@ -262,6 +265,7 @@ func (rf *Raft) setTerm(term int) {
 func (rf *Raft) getVotes() int {
 	rf.mu.RLock()
 	defer rf.mu.RUnlock()
+	fmt.Println("GET", rf.me, rf.votes)
 	return rf.votes
 }
 
@@ -269,6 +273,7 @@ func (rf *Raft) incrVotes() int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.votes += 1
+	fmt.Println("SET", rf.me, rf.votes)
 	return rf.votes
 }
 
@@ -339,6 +344,7 @@ func (rf *Raft) requestVotes() {
 
 			if voteReply.Term > rf.currentTerm {
 				rf.currentTerm = voteReply.Term
+				fmt.Println("--------2--------")
 				rf.resetVotes()
 				rf.votedFor = -1
 				return
