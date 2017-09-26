@@ -109,10 +109,19 @@ func (rf *Raft) sendAppendEntries() {
 				reply := &AppendEntriesReply{}
 				for {
 					ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
+
+					if args.Term != rf.currentTerm {
+						return
+					}
+
 					if ok {
 						break
 					}
 					time.Sleep(time.Millisecond * 10)
+				}
+
+				if args.Term != rf.currentTerm {
+					return
 				}
 
 				if reply.Success {
@@ -165,7 +174,7 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	if args.Term < rf.currentTerm {
-		fmt.Println(rf.me,"拒绝为", args.CandidateIdx, "投票(1)")
+		fmt.Println(rf.me, "(", rf.currentTerm, ")","拒绝为", args.CandidateIdx, "(", args.Term, ")投票(1)")
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return

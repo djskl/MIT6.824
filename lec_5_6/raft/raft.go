@@ -287,10 +287,14 @@ func (rf *Raft) requestVotes() {
 				if ok {
 					break
 				}
-				if rf.votedFor != rf.me {
+				if rf.votedFor != rf.me || voteArgs.Term != rf.currentTerm {
 					return
 				}
 				time.Sleep(time.Millisecond * 10)
+			}
+
+			if voteArgs.Term != rf.currentTerm {
+				return
 			}
 
 			if voteReply.Term > rf.currentTerm {
