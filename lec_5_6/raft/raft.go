@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 	"math/rand"
-	"fmt"
 	"MIT6.824/lec_5_6/labrpc"
 )
 
@@ -96,7 +95,7 @@ func (rf *Raft) resetTimeOut() {
 func (rf *Raft) startTimeOut() {
 	go func() {
 		for {
-			rand_timeout := 100 + rand.Intn(200)
+			rand_timeout := 300 + rand.Intn(100)
 			select {
 			case <-rf.expCh:
 				break
@@ -111,11 +110,11 @@ func (rf *Raft) startTimeOut() {
 						rf.heartbeats[idx] = 0
 					}
 					if nums <= len(rf.peers)/2 {
-						fmt.Println("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
+						//DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
 						rf.toFollower(-1)
 					}
 				} else {
-					fmt.Println("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
+					//DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
 					rf.requestVotes()
 				}
 				break
@@ -281,7 +280,7 @@ func (rf *Raft) requestVotes() {
 		}
 		go func(serverIdx int) {
 			voteReply := &RequestVoteReply{}
-			fmt.Println(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
+			//DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
 			for {
 				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
 				if ok {
@@ -290,7 +289,7 @@ func (rf *Raft) requestVotes() {
 				if rf.votedFor != rf.me || voteArgs.Term != rf.currentTerm {
 					return
 				}
-				time.Sleep(time.Millisecond * 10)
+				time.Sleep(time.Millisecond * 20)
 			}
 
 			if voteArgs.Term != rf.currentTerm {
@@ -306,7 +305,7 @@ func (rf *Raft) requestVotes() {
 			if voteReply.VoteGranted {
 				currentVotes := rf.incrVotes()
 				if currentVotes == len(rf.peers)/2+1 {
-					fmt.Println(rf.me, rf.currentTerm, "当选", rf.logs)
+					DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)
 					rf.resetTimeOut()
 					for idx := 0; idx < len(rf.peers); idx++ {
 						rf.nextIndex[idx] = len(rf.logs)
@@ -391,7 +390,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	index = rf.addLogEntry(logEntry)
 
-	fmt.Println("Get Command:", rf.me, rf.currentTerm, index, command)
+	DPrintln("Get Command:", rf.me, rf.currentTerm, index, command)
 
 	return index, term, isLeader
 }

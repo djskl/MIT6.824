@@ -2,7 +2,6 @@ package raft
 
 import (
 	"time"
-	"fmt"
 )
 
 type AppendEntriesArgs struct {
@@ -66,8 +65,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = true
 
 	if t {
-		fmt.Println(rf.me, rf.currentTerm, "NEW", args.Items)
-		fmt.Println(rf.me, rf.currentTerm, "NOW", rf.logs)
+		DPrintln(rf.me, rf.currentTerm, "NEW", args.Items)
+		DPrintln(rf.me, rf.currentTerm, "NOW", rf.logs)
 	}
 
 	rf.updateServerIndex(args.CommitIndex, len(rf.logs))
@@ -106,22 +105,31 @@ func (rf *Raft) sendAppendEntries() {
 					rf.me,
 					rf.commitIndex,
 				}
+				if len(toEntries) > 0 {
+					DPrintln(rf.me, rf.currentTerm, serverIdx, "发送AppendEntries...")
+				}
 				reply := &AppendEntriesReply{}
 				for {
 					ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
 
-					if args.Term != rf.currentTerm {
+					/*if args.Term != rf.currentTerm {
+						DPrintln(rf.me, rf.currentTerm, "收到过期AppendEntries响应", serverIdx, args.Term)
 						return
-					}
+					}*/
 
 					if ok {
 						break
 					}
-					time.Sleep(time.Millisecond * 10)
+					time.Sleep(time.Millisecond * 20)
 				}
 
-				if args.Term != rf.currentTerm {
+				/*if args.Term != rf.currentTerm {
+					DPrintln(rf.me, rf.currentTerm, "收到过期AppendEntries响应", args.Term)
 					return
+				}*/
+
+				if len(toEntries) > 0 {
+					DPrintln(rf.me, rf.currentTerm, "收到正常AppendEntries响应", len(toEntries))
 				}
 
 				if reply.Success {
@@ -174,7 +182,7 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	if args.Term < rf.currentTerm {
-		fmt.Println(rf.me, "(", rf.currentTerm, ")","拒绝为", args.CandidateIdx, "(", args.Term, ")投票(1)")
+		DPrintln(rf.me, "(", rf.currentTerm, ")","拒绝为", args.CandidateIdx, "(", args.Term, ")投票(1)")
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -182,7 +190,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	//在当前term内，已经投票后，就不能再给其他节点投票了
 	if args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateIdx {
-		fmt.Println(rf.me,"拒绝为", args.CandidateIdx, "投票(2)", rf.votedFor)
+		DPrintln(rf.me,"拒绝为", args.CandidateIdx, "投票(2)", rf.votedFor)
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -201,7 +209,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.resetTimeOut()
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateIdx
-		fmt.Println(rf.me,"为", args.CandidateIdx, "投票")
+		DPrintln(rf.me,"为", args.CandidateIdx, "投票")
 		return
 	}
 
@@ -210,7 +218,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	fmt.Println(rf.me,"为", args.CandidateIdx, "投票")
+	DPrintln(rf.me,"为", args.CandidateIdx, "投票")
 	rf.resetTimeOut()
 	reply.VoteGranted = true
 	rf.votedFor = args.CandidateIdx
