@@ -105,31 +105,26 @@ func (rf *Raft) sendAppendEntries() {
 					rf.me,
 					rf.commitIndex,
 				}
-				if len(toEntries) > 0 {
-					DPrintln(rf.me, rf.currentTerm, serverIdx, "发送AppendEntries...")
-				}
 				reply := &AppendEntriesReply{}
 				for {
 					ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
 
-					/*if args.Term != rf.currentTerm {
+					if args.Term != rf.currentTerm {
 						DPrintln(rf.me, rf.currentTerm, "收到过期AppendEntries响应", serverIdx, args.Term)
-						return
-					}*/
-
-					if ok {
 						break
 					}
-					time.Sleep(time.Millisecond * 20)
+
+					if ok || !isLeader {
+						break
+					}
+					time.Sleep(time.Millisecond * 10)
 				}
 
-				/*if args.Term != rf.currentTerm {
-					DPrintln(rf.me, rf.currentTerm, "收到过期AppendEntries响应", args.Term)
-					return
-				}*/
-
-				if len(toEntries) > 0 {
-					DPrintln(rf.me, rf.currentTerm, "收到正常AppendEntries响应", len(toEntries))
+				if args.Term != rf.currentTerm {
+					if rf.getVotes() <= len(rf.peers)/2 {
+						isLeader = false
+					}
+					continue
 				}
 
 				if reply.Success {
@@ -143,6 +138,7 @@ func (rf *Raft) sendAppendEntries() {
 						return
 					}
 					if rf.getVotes() <= len(rf.peers)/2 {
+						isLeader = false
 						continue
 					}
 					rf.decrNextIndex(serverIdx, 1)

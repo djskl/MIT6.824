@@ -95,7 +95,7 @@ func (rf *Raft) resetTimeOut() {
 func (rf *Raft) startTimeOut() {
 	go func() {
 		for {
-			rand_timeout := 200 + rand.Intn(100)
+			rand_timeout := 200 + rand.Intn(300)
 			select {
 			case <-rf.expCh:
 				break
@@ -110,11 +110,11 @@ func (rf *Raft) startTimeOut() {
 						rf.heartbeats[idx] = 0
 					}
 					if nums <= len(rf.peers)/2 {
-						//DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
+						DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
 						rf.toFollower(-1)
 					}
 				} else {
-					//DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
+					DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
 					rf.requestVotes()
 				}
 				break
@@ -280,7 +280,7 @@ func (rf *Raft) requestVotes() {
 		}
 		go func(serverIdx int) {
 			voteReply := &RequestVoteReply{}
-			//DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
+			DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
 			for {
 				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
 				if ok {
@@ -289,7 +289,7 @@ func (rf *Raft) requestVotes() {
 				if rf.votedFor != rf.me || voteArgs.Term != rf.currentTerm {
 					return
 				}
-				time.Sleep(time.Millisecond * 20)
+				time.Sleep(time.Millisecond * 10)
 			}
 
 			if voteArgs.Term != rf.currentTerm {
