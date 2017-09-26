@@ -29,8 +29,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.resetTimeOut()
 
 	if args.LeaderID != rf.me {
-		rf.resetVotes()
-		rf.votedFor = args.LeaderID
+		rf.toFollower(args.LeaderID)
 	}
 
 	rf.currentTerm = args.Term
@@ -126,15 +125,13 @@ func (rf *Raft) sendAppendEntries() {
 						rf.currentTerm = reply.Term
 						return
 					}
-
 					if rf.getVotes() <= len(rf.peers)/2 {
 						continue
 					}
-
 					rf.decrNextIndex(serverIdx, 1)
-
 				}
-				time.Sleep(100 * time.Millisecond)
+				rf.heartbeats[rf.me] = 1
+				time.Sleep(10 * time.Millisecond)
 			}
 		}(server)
 	}
@@ -192,6 +189,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if args.LastLogTerm > lastLogTerm {
+		rf.resetTimeOut()
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateIdx
 		fmt.Println(rf.me,"为", args.CandidateIdx, "投票")
@@ -204,6 +202,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	fmt.Println(rf.me,"为", args.CandidateIdx, "投票")
+	rf.resetTimeOut()
 	reply.VoteGranted = true
 	rf.votedFor = args.CandidateIdx
 }

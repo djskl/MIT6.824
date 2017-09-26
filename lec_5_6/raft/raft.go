@@ -73,77 +73,16 @@ type Raft struct {
 
 	votes int
 	ot    bool
+
+	heartbeats []int
 }
 
-func (rf *Raft) checkLeader() bool {
-	oks := 1
-	ok_ch := make(chan bool)
-
-	fails := 0
-	fail_ch := make(chan bool)
-	for server, _ := range rf.peers {
-		if server == rf.me {
-			continue
-		}
-		go func(serverIdx int) {
-			nx := rf.getNextIndex(serverIdx)
-			px := nx - 1
-			preLogTerm := 0
-			if px > -1 && px < len(rf.logs) {
-				preLog := rf.logs[px]
-				preLogTerm = preLog.Term
-			}
-
-			args := &AppendEntriesArgs{
-				Term:        rf.currentTerm,
-				PreLogTerm:  preLogTerm,
-				PreLogIndex: px,
-				LeaderID:    rf.me,
-				CommitIndex: rf.commitIndex,
-			}
-
-			reply := &AppendEntriesReply{}
-			ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
-
-			if !ok || reply.Term > rf.currentTerm {
-				if fails++; fails > len(rf.peers)/2 {
-					fail_ch <- true
-				}
-			} else {
-				if !reply.Success {
-					rf.decrNextIndex(serverIdx, 1)
-				}
-				if oks++; oks > len(rf.peers)/2 {
-					ok_ch <- true
-				}
-			}
-		}(server)
-	}
-	select {
-	case <-ok_ch:
-		return true
-	case <-fail_ch:
-		return false
-	}
+func (rf *Raft) toFollower(serverIdx int) {
+	rf.resetVotes()
+	rf.votedFor = serverIdx
 }
 
 func (rf *Raft) resetTimeOut() {
-	if rf.ot {
-		go func() {
-			select {
-			case rf.expCh <- true:
-				break
-			case <-time.After(time.Second * time.Duration(1)):
-				break
-			}
-		}()
-	} else {
-		rf.startTimeOut()
-	}
-}
-
-func (rf *Raft) stopTimeOut() {
-	rf.ot = false
 	go func() {
 		select {
 		case rf.expCh <- true:
@@ -155,20 +94,34 @@ func (rf *Raft) stopTimeOut() {
 }
 
 func (rf *Raft) startTimeOut() {
-	rf.ot = true
 	go func() {
-	timeout_loop:
-		for rf.ot {
+		for {
 			rand_timeout := 100 + rand.Intn(200)
 			select {
 			case <-rf.expCh:
 				break
 			case <-time.After(time.Millisecond * time.Duration(rand_timeout)):
-				fmt.Println("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
-				break timeout_loop
+				_, isLeader := rf.GetState()
+				if isLeader {
+					nums := 1
+					for _, v := range rf.heartbeats {
+						nums += v
+					}
+					for idx:=0;idx<len(rf.heartbeats);idx++ {
+						rf.heartbeats[idx] = 0
+					}
+					fmt.Println(rf.me, "leader过期...", nums)
+					if nums <= len(rf.peers)/2 {
+						fmt.Println("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...")
+						rf.toFollower(-1)
+					}
+				} else {
+					fmt.Println("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
+					rf.requestVotes()
+				}
+				break
 			}
 		}
-		rf.requestVotes()
 	}()
 }
 
@@ -338,20 +291,20 @@ func (rf *Raft) requestVotes() {
 				if rf.votedFor != rf.me {
 					return
 				}
+				time.Sleep(time.Millisecond * 10)
 			}
 
 			if voteReply.Term > rf.currentTerm {
 				rf.currentTerm = voteReply.Term
-				rf.resetVotes()
-				rf.votedFor = -1
+				rf.toFollower(-1)
 				return
 			}
 
 			if voteReply.VoteGranted {
 				currentVotes := rf.incrVotes()
 				if currentVotes == len(rf.peers)/2+1 {
-					rf.stopTimeOut()
 					fmt.Println(rf.me, rf.currentTerm, "当选", rf.logs)
+					rf.resetTimeOut()
 					for idx := 0; idx < len(rf.peers); idx++ {
 						rf.nextIndex[idx] = len(rf.logs)
 						rf.matchIndex[idx] = 0
@@ -366,16 +319,14 @@ func (rf *Raft) requestVotes() {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	var isleader bool
 	// Your code here (2A).
 	currentVotes := rf.getVotes()
-	if currentVotes <= len(rf.peers)/2 {
-		return rf.currentTerm, false
+
+	if currentVotes > len(rf.peers)/2 {
+		return rf.currentTerm, true
 	}
 
-	isleader = rf.checkLeader()
-
-	return rf.currentTerm, isleader
+	return rf.currentTerm, false
 }
 
 //
@@ -477,6 +428,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	for idx := 0; idx < len(rf.peers); idx++ {
 		rf.nextIndex[idx] = 1
 	}
+
+	rf.heartbeats = make([]int, len(rf.peers))
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.apdCh = make(chan bool)
