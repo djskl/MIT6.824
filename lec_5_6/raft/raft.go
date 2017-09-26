@@ -110,9 +110,8 @@ func (rf *Raft) startTimeOut() {
 					for idx:=0;idx<len(rf.heartbeats);idx++ {
 						rf.heartbeats[idx] = 0
 					}
-					fmt.Println(rf.me, "leader过期...", nums)
 					if nums <= len(rf.peers)/2 {
-						fmt.Println("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...")
+						fmt.Println("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
 						rf.toFollower(-1)
 					}
 				} else {

@@ -106,13 +106,13 @@ func (rf *Raft) sendAppendEntries() {
 					rf.me,
 					rf.commitIndex,
 				}
-
 				reply := &AppendEntriesReply{}
 				for {
 					ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
 					if ok {
 						break
 					}
+					time.Sleep(time.Millisecond * 10)
 				}
 
 				if reply.Success {
@@ -130,7 +130,7 @@ func (rf *Raft) sendAppendEntries() {
 					}
 					rf.decrNextIndex(serverIdx, 1)
 				}
-				rf.heartbeats[rf.me] = 1
+				rf.heartbeats[serverIdx] = 1
 				time.Sleep(10 * time.Millisecond)
 			}
 		}(server)
