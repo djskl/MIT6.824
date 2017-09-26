@@ -95,7 +95,7 @@ func (rf *Raft) resetTimeOut() {
 func (rf *Raft) startTimeOut() {
 	go func() {
 		for {
-			rand_timeout := 300 + rand.Intn(100)
+			rand_timeout := 200 + rand.Intn(100)
 			select {
 			case <-rf.expCh:
 				break
