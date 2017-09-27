@@ -74,6 +74,7 @@ type Raft struct {
 	ot    bool
 
 	heartbeats []int
+	logChs []chan int
 }
 
 func (rf *Raft) toFollower(serverIdx int) {
@@ -95,7 +96,7 @@ func (rf *Raft) resetTimeOut() {
 func (rf *Raft) startTimeOut() {
 	go func() {
 		for {
-			rand_timeout := 200 + rand.Intn(300)
+			rand_timeout := ELECTION_TIMEOUT_BASE + rand.Intn(ELECTION_TIMEOUT_FACT)
 			select {
 			case <-rf.expCh:
 				break
@@ -289,7 +290,6 @@ func (rf *Raft) requestVotes() {
 				if rf.votedFor != rf.me || voteArgs.Term != rf.currentTerm {
 					return
 				}
-				time.Sleep(time.Millisecond * 10)
 			}
 
 			if voteArgs.Term != rf.currentTerm {
@@ -390,6 +390,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	index = rf.addLogEntry(logEntry)
 
+	for idx:=0;idx<len(rf.peers);idx++ {
+		if idx == rf.me {
+			continue
+		}
+		go func(serverIdx int) {
+			rf.logChs[serverIdx] <- index
+		}(idx)
+	}
+
 	DPrintln("Get Command:", rf.me, rf.currentTerm, index, command)
 
 	return index, term, isLeader
@@ -425,10 +434,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 	rf.apyCh = applyCh
 
+	rf.logChs = make([]chan int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.nextIndex = make([]int, len(rf.peers))
 	for idx := 0; idx < len(rf.peers); idx++ {
 		rf.nextIndex[idx] = 1
+		rf.logChs[idx] = make(chan int)
 	}
 
 	rf.heartbeats = make([]int, len(rf.peers))

@@ -1,7 +1,14 @@
 package raft
 
 import "log"
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
+
+const HEARTBEAT_TIMEOUT = 50 * time.Millisecond
+const ELECTION_TIMEOUT_BASE = 200
+const ELECTION_TIMEOUT_FACT = 300
 
 // Debugging
 const Debug = 0
