@@ -2,19 +2,20 @@ package raft
 
 import (
 	"time"
+	"sync/atomic"
 )
 
 type AppendEntriesArgs struct {
-	Term        int
+	Term        int32
 	Items       []Entry
-	PreLogTerm  int
+	PreLogTerm  int32
 	PreLogIndex int
 	LeaderID    int
-	CommitIndex int
+	CommitIndex int32
 }
 
 type AppendEntriesReply struct {
-	Term    int
+	Term    int32
 	Success bool
 }
 
@@ -25,13 +26,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	rf.resetTimeOut()
+	rf.ResetTimeOut()
 
 	if args.LeaderID != rf.me {
-		rf.toFollower(args.LeaderID)
+		rf.TurntoFollower(args.LeaderID)
 	}
 
-	rf.currentTerm = args.Term
+	atomic.StoreInt32(&rf.currentTerm, args.Term)	//rf.currentTerm = args.Term
 	reply.Term = args.Term
 	preLogIdx := args.PreLogIndex
 
@@ -42,29 +43,29 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	//前缀一致性检查
 	if preLogIdx > -1 && preLogIdx < len(rf.logs) {
-		preLogEntry := rf.logs[args.PreLogIndex]
+		preLogEntry := rf.getLogEntry(args.PreLogIndex) //rf.logs[args.PreLogIndex]
 		if preLogEntry.Term != args.PreLogTerm {
 			reply.Success = false
 			return
 		}
 	}
 
-	t := false
 	if preLogIdx == len(rf.logs)-1 {
-		for _, item := range (args.Items) {
-			t = true
-			rf.logs = append(rf.logs, item)
-		}
+		rf.addLogEntries(args.Items)
+		/*for _, item := range (args.Items) {
+			rf.addLogEntry(item)
+		}*/
 	} else {
-		rf.logs = rf.logs[:args.PreLogIndex+1]
-		for _, item := range (args.Items) {
+		rf.delLogEntry(args.PreLogIndex+1)	//rf.logs = rf.logs[:args.PreLogIndex+1]
+		/*for _, item := range (args.Items) {
 			t = true
-			rf.logs = append(rf.logs, item)
-		}
+			rf.addLogEntry(item)
+		}*/
+		rf.addLogEntries(args.Items)
 	}
 	reply.Success = true
 
-	if t {
+	if len(args.Items) > 0 {
 		DPrintln(rf.me, rf.currentTerm, "NEW", args.Items)
 		DPrintln(rf.me, rf.currentTerm, "NOW", rf.logs)
 	}
@@ -83,9 +84,9 @@ func (rf *Raft) sendAppendEntries() {
 		}
 
 		go func(serverIdx int) {
-			preLogTerm := 0
+			var preLogTerm int32
 			for isLeader {
-				nx := rf.getNextIndex(serverIdx)
+				nx := rf.nextIndex[serverIdx]
 				px := nx - 1
 				toEntries := []Entry{}
 				if len(rf.logs) > nx {
@@ -120,7 +121,7 @@ func (rf *Raft) sendAppendEntries() {
 				}
 
 				if args.Term != rf.currentTerm {
-					if rf.getVotes() <= len(rf.peers)/2 {
+					if int(rf.votes) <= len(rf.peers)/2 {
 						isLeader = false
 					}
 					continue
@@ -131,16 +132,15 @@ func (rf *Raft) sendAppendEntries() {
 				} else {
 					if rf.currentTerm < reply.Term {
 						isLeader = false
-						rf.resetVotes()
-						rf.votedFor = -1
+						rf.TurntoFollower(-1)
 						rf.currentTerm = reply.Term
 						return
 					}
-					if rf.getVotes() <= len(rf.peers)/2 {
+					if int(rf.votes) <= len(rf.peers)/2 {
 						isLeader = false
 						continue
 					}
-					rf.decrNextIndex(serverIdx, 1)
+					rf.nextIndex[serverIdx] = rf.nextIndex[serverIdx] - 1	//rf.decrNextIndex(serverIdx, 1)
 				}
 
 				rf.heartbeats[serverIdx] = 1
@@ -165,10 +165,10 @@ func (rf *Raft) sendAppendEntries() {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term         int
+	Term         int32
 	CandidateIdx int
 	LastLogIndex int
-	LastLogTerm  int
+	LastLogTerm  int32
 }
 
 //
@@ -177,7 +177,7 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	Term        int
+	Term        int32
 	VoteGranted bool
 }
 
@@ -204,14 +204,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.currentTerm = args.Term
 	reply.Term = args.Term
 
-	lastLogTerm := 0
 	lastLogIndex := len(rf.logs) - 1
+	var lastLogTerm int32
 	if lastLogIndex > -1 {
-		lastLogTerm = rf.logs[lastLogIndex].Term
+		logEntry := rf.getLogEntry(lastLogIndex)
+		lastLogTerm = logEntry.Term	//lastLogTerm = rf.logs[lastLogIndex].Term
 	}
 
 	if args.LastLogTerm > lastLogTerm {
-		rf.resetTimeOut()
+		rf.ResetTimeOut()
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateIdx
 		DPrintln(rf.me, "为", args.CandidateIdx, "投票")
@@ -224,7 +225,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	DPrintln(rf.me, "为", args.CandidateIdx, "投票")
-	rf.resetTimeOut()
+	rf.ResetTimeOut()
 	reply.VoteGranted = true
 	rf.votedFor = args.CandidateIdx
 }

@@ -22,6 +22,7 @@ import (
 	"time"
 	"math/rand"
 	"MIT6.824/lec_5_6/labrpc"
+	"sync/atomic"
 )
 
 // import "bytes"
@@ -40,7 +41,7 @@ type ApplyMsg struct {
 }
 
 type Entry struct {
-	Term    int
+	Term    int32
 	Command interface{}
 }
 
@@ -56,11 +57,13 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	currentTerm int
 	votedFor    int
+	currentTerm int32
 	logs        []Entry
 
-	commitIndex int
+	votes int32
+
+	commitIndex int32
 	lastApplied int
 
 	nextIndex  []int
@@ -68,91 +71,44 @@ type Raft struct {
 
 	expCh chan bool
 	apdCh chan bool
+	cmtCh chan int
 	apyCh chan ApplyMsg
 
-	votes int
-	ot    bool
-
 	heartbeats []int
-	logChs []chan int
+	logChs     []chan int
 }
 
-func (rf *Raft) toFollower(serverIdx int) {
-	rf.resetVotes()
+func (rf *Raft) TurntoFollower(serverIdx int) {
+	atomic.StoreInt32(&rf.votes, 0)
 	rf.votedFor = serverIdx
 }
 
-func (rf *Raft) resetTimeOut() {
-	go func() {
-		select {
-		case rf.expCh <- true:
-			break
-		case <-time.After(time.Second * time.Duration(1)):
-			break
-		}
-	}()
-}
-
-func (rf *Raft) startTimeOut() {
-	go func() {
-		for {
-			rand_timeout := ELECTION_TIMEOUT_BASE + rand.Intn(ELECTION_TIMEOUT_FACT)
-			select {
-			case <-rf.expCh:
-				break
-			case <-time.After(time.Millisecond * time.Duration(rand_timeout)):
-				_, isLeader := rf.GetState()
-				if isLeader {
-					nums := 1
-					for _, v := range rf.heartbeats {
-						nums += v
-					}
-					for idx:=0;idx<len(rf.heartbeats);idx++ {
-						rf.heartbeats[idx] = 0
-					}
-					if nums <= len(rf.peers)/2 {
-						DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
-						rf.toFollower(-1)
-					}
-				} else {
-					DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
-					rf.requestVotes()
-				}
-				break
-			}
-		}
-	}()
-}
-
-func (rf *Raft) updateServerIndex(leaderCmtIdx int, size int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	if leaderCmtIdx > size {
-		rf.commitIndex = size - 1
+func (rf *Raft) updateServerIndex(leaderCmtIdx int32, size int) {
+	cmtIdx := int(leaderCmtIdx)
+	if cmtIdx > size {
+		atomic.StoreInt32(&rf.commitIndex, int32(size-1))
+		//rf.commitIndex = size - 1
 	} else {
-		rf.commitIndex = leaderCmtIdx
+		atomic.StoreInt32(&rf.commitIndex, int32(leaderCmtIdx))
+		//rf.commitIndex = leaderCmtIdx
 	}
 
-	go func() {
-		for rf.lastApplied < rf.commitIndex {
-			toIdx := rf.lastApplied + 1
-			logEntry := rf.logs[toIdx]
-			rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
-			rf.lastApplied = toIdx
-		}
-	}()
+	go func(cmtIdx int32) {
+		rf.cmtCh <- int(cmtIdx)
+	}(rf.commitIndex)
+
 }
 
 func (rf *Raft) updateLeaderIndex(serverIdx int, size int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	if size < 1 {
+		return
+	}
 
-	rf.nextIndex[serverIdx] += size
-	idx := rf.nextIndex[serverIdx] - 1
-	rf.matchIndex[serverIdx] = idx
+	rf.nextIndex[serverIdx] += size 						//atomic.AddInt32(&rf.nextIndex[serverIdx], int32(size))
+	rf.matchIndex[serverIdx] = rf.nextIndex[serverIdx] - 1 	//atomic.StoreInt32(&rf.matchIndex[serverIdx], int32(idx))
 
-	for idx > -1 {
+	for	idx := rf.nextIndex[serverIdx]-1;idx > -1;idx-- {
+
 		aEntry := rf.logs[idx]
 
 		//不能提交上一个term的日志
@@ -168,21 +124,21 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, size int) {
 		}
 
 		if nums > len(rf.peers)/2 {
-			rf.commitIndex = idx
+			atomic.StoreInt32(&rf.commitIndex, int32(idx)) //rf.commitIndex = idx
+			go func(cmtIdx int32) {
+				rf.cmtCh <- int(cmtIdx)
+			}(rf.commitIndex)
 			break
 		}
-
-		idx -= 1
 	}
+}
 
-	go func() {
-		for rf.lastApplied < rf.commitIndex {
-			toIdx := rf.lastApplied + 1
-			logEntry := rf.logs[toIdx]
-			rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
-			rf.lastApplied = toIdx
-		}
-	}()
+func (rf *Raft) addLogEntries(entries []Entry) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	for _, item := range (entries) {
+		rf.logs = append(rf.logs, item)
+	}
 }
 
 func (rf *Raft) addLogEntry(entry Entry) int {
@@ -195,85 +151,38 @@ func (rf *Raft) addLogEntry(entry Entry) int {
 	return size - 1
 }
 
-func (rf *Raft) getCurrentTerm() int {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-	return rf.currentTerm
-}
-
-func (rf *Raft) incrTerm(deltaTerm int) {
-	rf.currentTerm += deltaTerm
-}
-
-func (rf *Raft) setTerm(term int) {
+func (rf *Raft) getLogEntry(idx int) Entry {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.currentTerm = term
+	return rf.logs[idx]
 }
 
-func (rf *Raft) getVotes() int {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-	return rf.votes
-}
-
-func (rf *Raft) incrVotes() int {
+func (rf *Raft) delLogEntry(beg int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.votes += 1
-	return rf.votes
-}
-
-func (rf *Raft) resetVotes() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	rf.votes = 0
-}
-
-func (rf *Raft) getNextIndex(server int) int {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-	nx := rf.nextIndex[server]
-	return nx
-}
-
-func (rf *Raft) incrNextIndex(server int, deltaNX int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	rf.nextIndex[server] += deltaNX
-}
-
-func (rf *Raft) decrNextIndex(server int, deltaNX int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	rf.nextIndex[server] -= deltaNX
-	if rf.nextIndex[server] < 0 {
-		rf.nextIndex[server] = 0
-	}
+	rf.logs = rf.logs[:beg]
 }
 
 func (rf *Raft) requestVotes() {
-	rf.resetVotes()
-	rf.incrVotes()
-	rf.incrTerm(1)
+	atomic.StoreInt32(&rf.votes, 1)	//rf.resetVotes();rf.incrVotes()
+	atomic.AddInt32(&rf.currentTerm, 1)	//rf.incrTerm(1)
 
 	rf.votedFor = rf.me
-
-	lastLogItem := 0
 	lastLogIdx := len(rf.logs) - 1
 
+	var lastLogItem int32
 	if lastLogIdx > -1 {
 		lastLogItem = rf.logs[lastLogIdx].Term
 	}
 
 	voteArgs := &RequestVoteArgs{
-		rf.getCurrentTerm(),
+		rf.currentTerm,
 		rf.me,
 		lastLogIdx,
 		lastLogItem,
 	}
 
-	rf.resetTimeOut()
+	rf.ResetTimeOut()
 
 	for idx, _ := range rf.peers {
 		if idx == rf.me {
@@ -298,15 +207,16 @@ func (rf *Raft) requestVotes() {
 
 			if voteReply.Term > rf.currentTerm {
 				rf.currentTerm = voteReply.Term
-				rf.toFollower(-1)
+				rf.TurntoFollower(-1)
 				return
 			}
 
 			if voteReply.VoteGranted {
-				currentVotes := rf.incrVotes()
+				//currentVotes := rf.incrVotes()
+				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
 				if currentVotes == len(rf.peers)/2+1 {
 					DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)
-					rf.resetTimeOut()
+					rf.ResetTimeOut()
 					for idx := 0; idx < len(rf.peers); idx++ {
 						rf.nextIndex[idx] = len(rf.logs)
 						rf.matchIndex[idx] = 0
@@ -322,13 +232,11 @@ func (rf *Raft) requestVotes() {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
-	currentVotes := rf.getVotes()
-
-	if currentVotes > len(rf.peers)/2 {
-		return rf.currentTerm, true
+	if int(rf.votes) > len(rf.peers)/2 {
+		return int(rf.currentTerm), true
 	}
 
-	return rf.currentTerm, false
+	return int(rf.currentTerm), false
 }
 
 //
@@ -386,11 +294,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, false
 	}
 
-	logEntry := Entry{term, command}
+	logEntry := Entry{int32(term), command}
 
 	index = rf.addLogEntry(logEntry)
 
-	for idx:=0;idx<len(rf.peers);idx++ {
+	for idx := 0; idx < len(rf.peers); idx++ {
 		if idx == rf.me {
 			continue
 		}
@@ -402,6 +310,62 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	DPrintln("Get Command:", rf.me, rf.currentTerm, index, command)
 
 	return index, term, isLeader
+}
+
+func (rf *Raft) StartApply() {
+	go func() {
+		for {
+			cmtIdx := <-rf.cmtCh //cmtIdx := int(atomic.LoadInt32(&rf.commitIndex))
+			for rf.lastApplied < cmtIdx {
+				toIdx := rf.lastApplied + 1
+				logEntry := rf.getLogEntry(toIdx) //rf.logs[toIdx]
+				rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
+				rf.lastApplied = toIdx
+			}
+		}
+	}()
+}
+
+func (rf *Raft) StartTimeOut() {
+	go func() {
+		for {
+			rand_timeout := ELECTION_TIMEOUT_BASE + rand.Intn(ELECTION_TIMEOUT_FACT)
+			select {
+			case <-rf.expCh:
+				break
+			case <-time.After(time.Millisecond * time.Duration(rand_timeout)):
+				_, isLeader := rf.GetState()
+				if isLeader {
+					nums := 1
+					for _, v := range rf.heartbeats {
+						nums += v
+					}
+					for idx := 0; idx < len(rf.heartbeats); idx++ {
+						rf.heartbeats[idx] = 0
+					}
+					if nums <= len(rf.peers)/2 {
+						DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
+						rf.TurntoFollower(-1)
+					}
+				} else {
+					DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
+					rf.requestVotes()
+				}
+				break
+			}
+		}
+	}()
+}
+
+func (rf *Raft) ResetTimeOut() {
+	go func() {
+		select {
+		case rf.expCh <- true:
+			break
+		case <-time.After(time.Second * time.Duration(1)):
+			break
+		}
+	}()
 }
 
 //
@@ -447,7 +411,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.apdCh = make(chan bool)
 	rf.expCh = make(chan bool)
-	rf.startTimeOut()
+	rf.cmtCh = make(chan int)
+
+	rf.StartTimeOut()
+	rf.StartApply()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
