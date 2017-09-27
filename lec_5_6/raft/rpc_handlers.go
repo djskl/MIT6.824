@@ -42,12 +42,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	//前缀一致性检查
-	if preLogIdx > -1 && preLogIdx < len(rf.logs) {
-		preLogEntry := rf.getLogEntry(args.PreLogIndex) //rf.logs[args.PreLogIndex]
-		if preLogEntry.Term != args.PreLogTerm {
-			reply.Success = false
-			return
-		}
+	err, preLogEntry := rf.getLogEntry(args.PreLogIndex) //rf.logs[args.PreLogIndex]
+	if err == nil && preLogEntry.Term != args.PreLogTerm {
+		reply.Success = false
+		return
 	}
 
 	if preLogIdx == len(rf.logs)-1 {
@@ -207,8 +205,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	lastLogIndex := len(rf.logs) - 1
 	var lastLogTerm int32
 	if lastLogIndex > -1 {
-		logEntry := rf.getLogEntry(lastLogIndex)
-		lastLogTerm = logEntry.Term	//lastLogTerm = rf.logs[lastLogIndex].Term
+		err, logEntry := rf.getLogEntry(lastLogIndex)
+		if err == nil {
+			lastLogTerm = logEntry.Term	//lastLogTerm = rf.logs[lastLogIndex].Term
+		}
 	}
 
 	if args.LastLogTerm > lastLogTerm {

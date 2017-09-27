@@ -23,6 +23,7 @@ import (
 	"math/rand"
 	"MIT6.824/lec_5_6/labrpc"
 	"sync/atomic"
+	"errors"
 )
 
 // import "bytes"
@@ -104,12 +105,20 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, size int) {
 		return
 	}
 
-	rf.nextIndex[serverIdx] += size 						//atomic.AddInt32(&rf.nextIndex[serverIdx], int32(size))
+	if rf.nextIndex[serverIdx] + size > len(rf.logs) {
+		rf.nextIndex[serverIdx] = len(rf.logs)
+	}else{
+		rf.nextIndex[serverIdx] += size 						//atomic.AddInt32(&rf.nextIndex[serverIdx], int32(size))
+	}
+
 	rf.matchIndex[serverIdx] = rf.nextIndex[serverIdx] - 1 	//atomic.StoreInt32(&rf.matchIndex[serverIdx], int32(idx))
 
 	for	idx := rf.nextIndex[serverIdx]-1;idx > -1;idx-- {
 
-		aEntry := rf.logs[idx]
+		err, aEntry := rf.getLogEntry(idx)//aEntry := rf.logs[idx]
+		if err != nil {
+			continue
+		}
 
 		//不能提交上一个term的日志
 		if aEntry.Term != rf.currentTerm {
@@ -151,10 +160,14 @@ func (rf *Raft) addLogEntry(entry Entry) int {
 	return size - 1
 }
 
-func (rf *Raft) getLogEntry(idx int) Entry {
+func (rf *Raft) getLogEntry(idx int) (error, Entry) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return rf.logs[idx]
+	if idx < 0 || idx >= len(rf.logs) {
+		err := errors.New("Out of Index")
+		return  err, Entry{}
+	}
+	return nil, rf.logs[idx]
 }
 
 func (rf *Raft) delLogEntry(beg int) {
@@ -318,7 +331,10 @@ func (rf *Raft) StartApply() {
 			cmtIdx := <-rf.cmtCh //cmtIdx := int(atomic.LoadInt32(&rf.commitIndex))
 			for rf.lastApplied < cmtIdx {
 				toIdx := rf.lastApplied + 1
-				logEntry := rf.getLogEntry(toIdx) //rf.logs[toIdx]
+				err, logEntry := rf.getLogEntry(toIdx) //rf.logs[toIdx]
+				if err != nil {
+					break
+				}
 				rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
 				rf.lastApplied = toIdx
 			}

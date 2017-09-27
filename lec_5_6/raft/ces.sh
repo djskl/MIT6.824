@@ -1,9 +1,9 @@
 #!/bin/bash
 PIDS=""
 
-for((i=1;i<100;i++))
+for((i=0;i<50;i++))
 do
-    go test -run 2A > /tmp/raft/$i.txt &
+    go test -run 2B > /tmp/raft/$i.txt &
     PIDS=$PIDS" "$!
 done
 

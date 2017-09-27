@@ -19,6 +19,13 @@ func DPrintln(a ...interface{})  {
 	}
 }
 
+func DebugPrintf(format string, a ...interface{}) (n int, err error)  {
+	if Debug > 0 {
+		fmt.Printf(format, a...)
+	}
+	return
+}
+
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
 		log.Printf(format, a...)
