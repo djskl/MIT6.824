@@ -84,10 +84,11 @@ func (rf *Raft) TurntoFollower(serverIdx int) {
 	rf.votedFor = serverIdx
 }
 
-func (rf *Raft) updateServerIndex(leaderCmtIdx int32, size int) {
-	cmtIdx := int(leaderCmtIdx)
-	if cmtIdx > size {
-		atomic.StoreInt32(&rf.commitIndex, int32(size-1))
+func (rf *Raft) updateServerIndex(leaderCmtIdx int32) {
+	cmtIdx, logNums := int(leaderCmtIdx), len(rf.logs)
+
+	if cmtIdx > logNums {
+		atomic.StoreInt32(&rf.commitIndex, int32(logNums-1))
 		//rf.commitIndex = size - 1
 	} else {
 		atomic.StoreInt32(&rf.commitIndex, int32(leaderCmtIdx))
@@ -100,15 +101,15 @@ func (rf *Raft) updateServerIndex(leaderCmtIdx int32, size int) {
 
 }
 
-func (rf *Raft) updateLeaderIndex(serverIdx int, size int) {
-	if size < 1 {
+func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
+	if logNum < 1 {
 		return
 	}
 
-	if rf.nextIndex[serverIdx] + size > len(rf.logs) {
+	if rf.nextIndex[serverIdx] + logNum > len(rf.logs) {
 		rf.nextIndex[serverIdx] = len(rf.logs)
 	}else{
-		rf.nextIndex[serverIdx] += size 						//atomic.AddInt32(&rf.nextIndex[serverIdx], int32(size))
+		rf.nextIndex[serverIdx] += logNum 						//atomic.AddInt32(&rf.nextIndex[serverIdx], int32(size))
 	}
 
 	rf.matchIndex[serverIdx] = rf.nextIndex[serverIdx] - 1 	//atomic.StoreInt32(&rf.matchIndex[serverIdx], int32(idx))
@@ -170,9 +171,25 @@ func (rf *Raft) getLogEntry(idx int) (error, Entry) {
 	return nil, rf.logs[idx]
 }
 
-func (rf *Raft) delLogEntry(beg int) {
+func (rf *Raft) getLogEntries(beg int) []Entry {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	size := len(rf.logs)
+	if size == 0 || beg < 0 || beg >= size {
+		return nil
+	}
+	return rf.logs[beg:]
+
+}
+
+func (rf *Raft) delLogEntries(beg int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	size := len(rf.logs)
+	if size == 0 || beg < 0 || beg > size {
+		return
+	}
+
 	rf.logs = rf.logs[:beg]
 }
 
@@ -225,7 +242,6 @@ func (rf *Raft) requestVotes() {
 			}
 
 			if voteReply.VoteGranted {
-				//currentVotes := rf.incrVotes()
 				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
 				if currentVotes == len(rf.peers)/2+1 {
 					DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)

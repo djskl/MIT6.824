@@ -54,7 +54,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.addLogEntry(item)
 		}*/
 	} else {
-		rf.delLogEntry(args.PreLogIndex+1)	//rf.logs = rf.logs[:args.PreLogIndex+1]
+		rf.delLogEntries(args.PreLogIndex+1) //rf.logs = rf.logs[:args.PreLogIndex+1]
 		/*for _, item := range (args.Items) {
 			t = true
 			rf.addLogEntry(item)
@@ -68,7 +68,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		DPrintln(rf.me, rf.currentTerm, "NOW", rf.logs)
 	}
 
-	rf.updateServerIndex(args.CommitIndex, len(rf.logs))
+	rf.updateServerIndex(args.CommitIndex)
 }
 
 func (rf *Raft) sendAppendEntries() {
@@ -88,11 +88,15 @@ func (rf *Raft) sendAppendEntries() {
 				px := nx - 1
 				toEntries := []Entry{}
 				if len(rf.logs) > nx {
-					toEntries = rf.logs[nx:]
+					toEntries = rf.getLogEntries(nx)	//toEntries = rf.logs[nx:]
 				}
 
-				if px > -1 && px < len(rf.logs) {
+				/*if px > -1 && px < len(rf.logs) {
 					preLog := rf.logs[px]
+					preLogTerm = preLog.Term
+				}*/
+				err, preLog := rf.getLogEntry(px)	//rf.logs[px]
+				if err == nil {
 					preLogTerm = preLog.Term
 				}
 
