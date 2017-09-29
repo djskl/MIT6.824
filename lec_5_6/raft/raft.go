@@ -79,14 +79,19 @@ type Raft struct {
 }
 
 func (rf *Raft) TurnToLeader() {
-	go func() {
-		rf.persist()
-	}()
 	rf.ResetTimeOut()
+
 	for idx := 0; idx < len(rf.peers); idx++ {
 		rf.nextIndex[idx] = len(rf.logs)
 		rf.matchIndex[idx] = 0
 	}
+
+	rf.addLogEntry(Entry{rf.currentTerm, -1})
+
+	go func() {
+		rf.persist()
+	}()
+
 	rf.sendAppendEntries()
 }
 
@@ -97,6 +102,7 @@ func (rf *Raft) TurnToCandidater() {
 	go func() {
 		rf.persist()
 	}()
+	rf.ResetTimeOut()
 	rf.requestVotes()
 }
 
@@ -127,6 +133,7 @@ func (rf *Raft) updateServerIndex(leaderCmtIdx int32) {
 }
 
 func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
+
 	if logNum < 1 {
 		return
 	}
@@ -139,14 +146,13 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
 
 	rf.matchIndex[serverIdx] = rf.nextIndex[serverIdx] - 1 //atomic.StoreInt32(&rf.matchIndex[serverIdx], int32(idx))
 
-	for idx := rf.nextIndex[serverIdx] - 1; idx > -1; idx-- {
+	for idx := rf.matchIndex[serverIdx]; idx > -1; idx-- {
 
 		err, aEntry := rf.getLogEntry(idx) //aEntry := rf.logs[idx]
 		if err != nil {
 			continue
 		}
 
-		//不能提交上一个term的日志
 		if aEntry.Term != rf.currentTerm {
 			break
 		}
@@ -158,7 +164,7 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
 			}
 		}
 
-		if nums > len(rf.peers)/2 {
+		if nums >= len(rf.peers)/2 {
 			atomic.StoreInt32(&rf.commitIndex, int32(idx)) //rf.commitIndex = idx
 			go func(cmtIdx int32) {
 				rf.cmtCh <- int(cmtIdx)
@@ -223,21 +229,17 @@ func (rf *Raft) getFirstIndex(pos int) int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	size := len(rf.logs)
-
 	if size == 0 || pos >= size || pos < 0 {
 		return size
 	}
 
 	term := rf.logs[pos].Term
-	for pos > -1 {
-		if rf.logs[pos].Term == term {
-			pos--
-		}
+	for pos > -1 && rf.logs[pos].Term == term {
+		pos--
 	}
 	pos++
 	return pos
 }
-
 
 func (rf *Raft) requestVotes() {
 	lastLogIdx := len(rf.logs) - 1
@@ -253,20 +255,20 @@ func (rf *Raft) requestVotes() {
 		lastLogItem,
 	}
 
-	rf.ResetTimeOut()
-
 	for idx, _ := range rf.peers {
 		if idx == rf.me {
 			continue
 		}
 		go func(serverIdx int) {
 			voteReply := &RequestVoteReply{}
-			DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
+			//DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
 			for {
 				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
+
 				if ok {
 					break
 				}
+
 				if rf.votedFor != rf.me || voteArgs.Term != rf.currentTerm {
 					return
 				}
@@ -285,7 +287,7 @@ func (rf *Raft) requestVotes() {
 			if voteReply.VoteGranted {
 				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
 				if currentVotes == len(rf.peers)/2+1 {
-					DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)
+					//DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)
 					rf.TurnToLeader()
 				}
 			}
@@ -391,7 +393,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		}(idx)
 	}
 
-	DPrintln("Get Command:", rf.me, rf.currentTerm, index, command)
+	DPrintln(rf.me, rf.currentTerm, "Get Command:", index, command)
 
 	return index, term, isLeader
 }
@@ -404,9 +406,11 @@ func (rf *Raft) StartApply() {
 				toIdx := rf.lastApplied + 1
 				err, logEntry := rf.getLogEntry(toIdx) //rf.logs[toIdx]
 				if err != nil {
+					DPrintln(rf.me, toIdx, "不存在", rf.logs)
 					break
 				}
 				rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
+				DPrintln(rf.me, rf.currentTerm, logEntry.Command, "已应用...")
 				rf.lastApplied = toIdx
 			}
 		}
@@ -431,11 +435,11 @@ func (rf *Raft) StartTimeOut() {
 						rf.heartbeats[idx] = 0
 					}
 					if nums <= len(rf.peers)/2 {
-						DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
+						//DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
 						rf.TurnToFollower(-1, rf.currentTerm)
 					}
 				} else {
-					DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
+					//DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
 					rf.TurnToCandidater()
 				}
 				break
