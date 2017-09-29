@@ -11,7 +11,7 @@ const ELECTION_TIMEOUT_BASE = 200
 const ELECTION_TIMEOUT_FACT = 300
 
 // Debugging
-const Debug = 0
+const Debug = 1
 
 func DPrintln(a ...interface{})  {
 	if Debug > 0 {

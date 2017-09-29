@@ -15,8 +15,9 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int32
-	Success bool
+	Term      int32
+	Success   bool
+	NextIndex int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -30,14 +31,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.LeaderID != rf.me {
 		rf.TurnToFollower(args.LeaderID, args.Term)
-	}else{
-		atomic.StoreInt32(&rf.currentTerm, args.Term)	//rf.currentTerm = args.Term
+	} else {
+		atomic.StoreInt32(&rf.currentTerm, args.Term) //rf.currentTerm = args.Term
 	}
 
 	reply.Term = args.Term
 	preLogIdx := args.PreLogIndex
 
 	if preLogIdx >= len(rf.logs) {
+		reply.NextIndex = len(rf.logs)
 		reply.Success = false
 		return
 	}
@@ -45,23 +47,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//前缀一致性检查
 	err, preLogEntry := rf.getLogEntry(args.PreLogIndex) //rf.logs[args.PreLogIndex]
 	if err == nil && preLogEntry.Term != args.PreLogTerm {
+		first_index := rf.getFirstIndex(args.PreLogIndex)
+		reply.NextIndex = first_index
+		rf.delLogEntries(first_index)
 		reply.Success = false
 		return
 	}
 
 	if preLogIdx == len(rf.logs)-1 {
 		rf.addLogEntries(args.Items)
-		/*for _, item := range (args.Items) {
-			rf.addLogEntry(item)
-		}*/
 	} else {
-		rf.delLogEntries(args.PreLogIndex+1) //rf.logs = rf.logs[:args.PreLogIndex+1]
-		/*for _, item := range (args.Items) {
-			t = true
-			rf.addLogEntry(item)
-		}*/
+		rf.delLogEntries(args.PreLogIndex + 1)
 		rf.addLogEntries(args.Items)
 	}
+
 	reply.Success = true
 
 	if len(args.Items) > 0 {
@@ -89,14 +88,14 @@ func (rf *Raft) sendAppendEntries() {
 				px := nx - 1
 				toEntries := []Entry{}
 				if len(rf.logs) > nx {
-					toEntries = rf.getLogEntries(nx)	//toEntries = rf.logs[nx:]
+					toEntries = rf.getLogEntries(nx) //toEntries = rf.logs[nx:]
 				}
 
 				/*if px > -1 && px < len(rf.logs) {
 					preLog := rf.logs[px]
 					preLogTerm = preLog.Term
 				}*/
-				err, preLog := rf.getLogEntry(px)	//rf.logs[px]
+				err, preLog := rf.getLogEntry(px) //rf.logs[px]
 				if err == nil {
 					preLogTerm = preLog.Term
 				}
@@ -109,6 +108,7 @@ func (rf *Raft) sendAppendEntries() {
 					rf.me,
 					rf.commitIndex,
 				}
+
 				reply := &AppendEntriesReply{}
 				for isLeader {
 					ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
@@ -142,7 +142,7 @@ func (rf *Raft) sendAppendEntries() {
 						isLeader = false
 						continue
 					}
-					rf.nextIndex[serverIdx] = rf.nextIndex[serverIdx] - 1	//rf.decrNextIndex(serverIdx, 1)
+					rf.nextIndex[serverIdx] = reply.NextIndex //rf.nextIndex[serverIdx] = rf.nextIndex[serverIdx] - 1
 				}
 
 				rf.heartbeats[serverIdx] = 1
@@ -211,7 +211,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if lastLogIndex > -1 {
 		err, logEntry := rf.getLogEntry(lastLogIndex)
 		if err == nil {
-			lastLogTerm = logEntry.Term	//lastLogTerm = rf.logs[lastLogIndex].Term
+			lastLogTerm = logEntry.Term //lastLogTerm = rf.logs[lastLogIndex].Term
 		}
 	}
 

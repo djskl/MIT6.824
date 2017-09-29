@@ -90,7 +90,7 @@ func (rf *Raft) TurnToLeader() {
 	rf.sendAppendEntries()
 }
 
-func (rf *Raft) TurnToCandidate() {
+func (rf *Raft) TurnToCandidater() {
 	atomic.StoreInt32(&rf.votes, 1)     //rf.resetVotes();rf.incrVotes()
 	atomic.AddInt32(&rf.currentTerm, 1) //rf.incrTerm(1)
 	rf.votedFor = rf.me
@@ -218,6 +218,26 @@ func (rf *Raft) delLogEntries(beg int) {
 	rf.logs = rf.logs[:beg]
 	rf.persist()
 }
+
+func (rf *Raft) getFirstIndex(pos int) int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	size := len(rf.logs)
+
+	if size == 0 || pos >= size || pos < 0 {
+		return size
+	}
+
+	term := rf.logs[pos].Term
+	for pos > -1 {
+		if rf.logs[pos].Term == term {
+			pos--
+		}
+	}
+	pos++
+	return pos
+}
+
 
 func (rf *Raft) requestVotes() {
 	lastLogIdx := len(rf.logs) - 1
@@ -416,7 +436,7 @@ func (rf *Raft) StartTimeOut() {
 					}
 				} else {
 					DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
-					rf.TurnToCandidate()
+					rf.TurnToCandidater()
 				}
 				break
 			}
