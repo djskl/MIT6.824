@@ -24,10 +24,9 @@ import (
 	"MIT6.824/lec_5_6/labrpc"
 	"sync/atomic"
 	"errors"
+	"bytes"
+	"encoding/gob"
 )
-
-// import "bytes"
-// import "encoding/gob"
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -79,9 +78,35 @@ type Raft struct {
 	logChs     []chan int
 }
 
-func (rf *Raft) TurntoFollower(serverIdx int) {
+func (rf *Raft) TurnToLeader() {
+	go func() {
+		rf.persist()
+	}()
+	rf.ResetTimeOut()
+	for idx := 0; idx < len(rf.peers); idx++ {
+		rf.nextIndex[idx] = len(rf.logs)
+		rf.matchIndex[idx] = 0
+	}
+	rf.sendAppendEntries()
+}
+
+func (rf *Raft) TurnToCandidate() {
+	atomic.StoreInt32(&rf.votes, 1)     //rf.resetVotes();rf.incrVotes()
+	atomic.AddInt32(&rf.currentTerm, 1) //rf.incrTerm(1)
+	rf.votedFor = rf.me
+	go func() {
+		rf.persist()
+	}()
+	rf.requestVotes()
+}
+
+func (rf *Raft) TurnToFollower(leaderIdx int, term int32) {
 	atomic.StoreInt32(&rf.votes, 0)
-	rf.votedFor = serverIdx
+	rf.votedFor = leaderIdx
+	atomic.StoreInt32(&rf.currentTerm, term) //rf.currentTerm = args.Term
+	go func() {
+		rf.persist()
+	}()
 }
 
 func (rf *Raft) updateServerIndex(leaderCmtIdx int32) {
@@ -106,17 +131,17 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
 		return
 	}
 
-	if rf.nextIndex[serverIdx] + logNum > len(rf.logs) {
+	if rf.nextIndex[serverIdx]+logNum > len(rf.logs) {
 		rf.nextIndex[serverIdx] = len(rf.logs)
-	}else{
-		rf.nextIndex[serverIdx] += logNum 						//atomic.AddInt32(&rf.nextIndex[serverIdx], int32(size))
+	} else {
+		rf.nextIndex[serverIdx] += logNum //atomic.AddInt32(&rf.nextIndex[serverIdx], int32(size))
 	}
 
-	rf.matchIndex[serverIdx] = rf.nextIndex[serverIdx] - 1 	//atomic.StoreInt32(&rf.matchIndex[serverIdx], int32(idx))
+	rf.matchIndex[serverIdx] = rf.nextIndex[serverIdx] - 1 //atomic.StoreInt32(&rf.matchIndex[serverIdx], int32(idx))
 
-	for	idx := rf.nextIndex[serverIdx]-1;idx > -1;idx-- {
+	for idx := rf.nextIndex[serverIdx] - 1; idx > -1; idx-- {
 
-		err, aEntry := rf.getLogEntry(idx)//aEntry := rf.logs[idx]
+		err, aEntry := rf.getLogEntry(idx) //aEntry := rf.logs[idx]
 		if err != nil {
 			continue
 		}
@@ -149,12 +174,14 @@ func (rf *Raft) addLogEntries(entries []Entry) {
 	for _, item := range (entries) {
 		rf.logs = append(rf.logs, item)
 	}
+	rf.persist()
 }
 
 func (rf *Raft) addLogEntry(entry Entry) int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.logs = append(rf.logs, entry)
+	rf.persist()
 	size := len(rf.logs)
 	rf.nextIndex[rf.me] = size
 	rf.matchIndex[rf.me] = size - 1
@@ -166,7 +193,7 @@ func (rf *Raft) getLogEntry(idx int) (error, Entry) {
 	defer rf.mu.Unlock()
 	if idx < 0 || idx >= len(rf.logs) {
 		err := errors.New("Out of Index")
-		return  err, Entry{}
+		return err, Entry{}
 	}
 	return nil, rf.logs[idx]
 }
@@ -179,7 +206,6 @@ func (rf *Raft) getLogEntries(beg int) []Entry {
 		return nil
 	}
 	return rf.logs[beg:]
-
 }
 
 func (rf *Raft) delLogEntries(beg int) {
@@ -189,17 +215,12 @@ func (rf *Raft) delLogEntries(beg int) {
 	if size == 0 || beg < 0 || beg > size {
 		return
 	}
-
 	rf.logs = rf.logs[:beg]
+	rf.persist()
 }
 
 func (rf *Raft) requestVotes() {
-	atomic.StoreInt32(&rf.votes, 1)	//rf.resetVotes();rf.incrVotes()
-	atomic.AddInt32(&rf.currentTerm, 1)	//rf.incrTerm(1)
-
-	rf.votedFor = rf.me
 	lastLogIdx := len(rf.logs) - 1
-
 	var lastLogItem int32
 	if lastLogIdx > -1 {
 		lastLogItem = rf.logs[lastLogIdx].Term
@@ -236,8 +257,8 @@ func (rf *Raft) requestVotes() {
 			}
 
 			if voteReply.Term > rf.currentTerm {
-				rf.currentTerm = voteReply.Term
-				rf.TurntoFollower(-1)
+				//rf.currentTerm = voteReply.Term
+				rf.TurnToFollower(-1, voteReply.Term)
 				return
 			}
 
@@ -245,12 +266,7 @@ func (rf *Raft) requestVotes() {
 				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
 				if currentVotes == len(rf.peers)/2+1 {
 					DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)
-					rf.ResetTimeOut()
-					for idx := 0; idx < len(rf.peers); idx++ {
-						rf.nextIndex[idx] = len(rf.logs)
-						rf.matchIndex[idx] = 0
-					}
-					rf.sendAppendEntries()
+					rf.TurnToLeader()
 				}
 			}
 		}(idx)
@@ -282,6 +298,17 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+
+	e.Encode(rf.logs)
+	e.Encode(rf.votes)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.currentTerm)
+
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -294,6 +321,14 @@ func (rf *Raft) readPersist(data []byte) {
 	// d := gob.NewDecoder(r)
 	// d.Decode(&rf.xxx)
 	// d.Decode(&rf.yyy)
+
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	d.Decode(&rf.logs)
+	d.Decode(&rf.votes)
+	d.Decode(&rf.votedFor)
+	d.Decode(&rf.currentTerm)
+
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
@@ -377,11 +412,11 @@ func (rf *Raft) StartTimeOut() {
 					}
 					if nums <= len(rf.peers)/2 {
 						DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
-						rf.TurntoFollower(-1)
+						rf.TurnToFollower(-1, rf.currentTerm)
 					}
 				} else {
 					DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
-					rf.requestVotes()
+					rf.TurnToCandidate()
 				}
 				break
 			}
@@ -427,8 +462,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	rf.votedFor = -1
-	rf.apyCh = applyCh
 
 	rf.logChs = make([]chan int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
@@ -444,9 +477,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.apdCh = make(chan bool)
 	rf.expCh = make(chan bool)
 	rf.cmtCh = make(chan int)
+	rf.apyCh = applyCh
 
 	rf.StartTimeOut()
 	rf.StartApply()
+
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

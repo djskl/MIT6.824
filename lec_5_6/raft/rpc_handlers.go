@@ -29,10 +29,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.ResetTimeOut()
 
 	if args.LeaderID != rf.me {
-		rf.TurntoFollower(args.LeaderID)
+		rf.TurnToFollower(args.LeaderID, args.Term)
+	}else{
+		atomic.StoreInt32(&rf.currentTerm, args.Term)	//rf.currentTerm = args.Term
 	}
 
-	atomic.StoreInt32(&rf.currentTerm, args.Term)	//rf.currentTerm = args.Term
 	reply.Term = args.Term
 	preLogIdx := args.PreLogIndex
 
@@ -134,8 +135,7 @@ func (rf *Raft) sendAppendEntries() {
 				} else {
 					if rf.currentTerm < reply.Term {
 						isLeader = false
-						rf.TurntoFollower(-1)
-						rf.currentTerm = reply.Term
+						rf.TurnToFollower(-1, reply.Term)
 						return
 					}
 					if int(rf.votes) <= len(rf.peers)/2 {
