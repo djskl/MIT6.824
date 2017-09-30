@@ -128,6 +128,7 @@ func (rf *Raft) sendAppendEntries() {
 				}
 
 				if reply.Success {
+					DPrintln(rf.me, rf.currentTerm, serverIdx, "提交:", toEntries)
 					rf.updateLeaderIndex(serverIdx, len(toEntries))
 				} else {
 					if rf.currentTerm < reply.Term {

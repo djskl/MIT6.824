@@ -86,11 +86,9 @@ func (rf *Raft) TurnToLeader() {
 		rf.matchIndex[idx] = 0
 	}
 
-	rf.addLogEntry(Entry{rf.currentTerm, -1})
+	rf.Start(-1)
 
-	go func() {
-		rf.persist()
-	}()
+	rf.persist()
 
 	rf.sendAppendEntries()
 }
@@ -164,7 +162,7 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
 			}
 		}
 
-		if nums >= len(rf.peers)/2 {
+		if nums > len(rf.peers)/2 {
 			atomic.StoreInt32(&rf.commitIndex, int32(idx)) //rf.commitIndex = idx
 			go func(cmtIdx int32) {
 				rf.cmtCh <- int(cmtIdx)
@@ -287,7 +285,7 @@ func (rf *Raft) requestVotes() {
 			if voteReply.VoteGranted {
 				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
 				if currentVotes == len(rf.peers)/2+1 {
-					//DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)
+					DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)
 					rf.TurnToLeader()
 				}
 			}
