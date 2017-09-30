@@ -46,12 +46,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	//前缀一致性检查
 	err, preLogEntry := rf.getLogEntry(args.PreLogIndex)
-	if err == nil && preLogEntry.Term != args.PreLogTerm {
-		first_index := rf.getFirstIndex(args.PreLogIndex)
-		reply.NextIndex = first_index
-		rf.delLogEntries(first_index)
-		reply.Success = false
-		return
+	if err == nil {
+		if preLogEntry.Term != args.PreLogTerm {
+			first_index := rf.getFirstIndex(args.PreLogIndex)
+			reply.NextIndex = first_index
+			rf.delLogEntries(first_index)
+			reply.Success = false
+			return
+		}
 	}
 
 	if preLogIdx == len(rf.logs)-1 {
@@ -128,7 +130,6 @@ func (rf *Raft) sendAppendEntries() {
 				}
 
 				if reply.Success {
-					DPrintln(rf.me, rf.currentTerm, serverIdx, "提交:", toEntries)
 					rf.updateLeaderIndex(serverIdx, len(toEntries))
 				} else {
 					if rf.currentTerm < reply.Term {

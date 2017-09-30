@@ -124,6 +124,8 @@ func (rf *Raft) updateServerIndex(leaderCmtIdx int32) {
 		//rf.commitIndex = leaderCmtIdx
 	}
 
+	DPrintln(rf.me, rf.commitIndex, rf.logs[rf.commitIndex], "之前的日志可以提交...")
+
 	go func(cmtIdx int32) {
 		rf.cmtCh <- int(cmtIdx)
 	}(rf.commitIndex)
@@ -151,10 +153,6 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
 			continue
 		}
 
-		if aEntry.Term != rf.currentTerm {
-			break
-		}
-
 		nums := 0
 		for s, _ := range rf.peers {
 			if rf.matchIndex[s] >= idx {
@@ -162,8 +160,14 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
 			}
 		}
 
-		if nums > len(rf.peers)/2 {
+		COUNT := len(rf.peers)/2 + 1
+		if aEntry.Term != rf.currentTerm {
+			COUNT = len(rf.peers)
+		}
+
+		if nums >= COUNT {
 			atomic.StoreInt32(&rf.commitIndex, int32(idx)) //rf.commitIndex = idx
+			//DPrintln(rf.me, rf.commitIndex, rf.logs[rf.commitIndex], "之前的日志可以提交...")
 			go func(cmtIdx int32) {
 				rf.cmtCh <- int(cmtIdx)
 			}(rf.commitIndex)
@@ -259,7 +263,7 @@ func (rf *Raft) requestVotes() {
 		}
 		go func(serverIdx int) {
 			voteReply := &RequestVoteReply{}
-			//DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
+			DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
 			for {
 				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
 
@@ -285,7 +289,7 @@ func (rf *Raft) requestVotes() {
 			if voteReply.VoteGranted {
 				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
 				if currentVotes == len(rf.peers)/2+1 {
-					DPrintln(rf.me, rf.currentTerm, "当选", rf.logs)
+					DPrintln(rf.me, rf.currentTerm, "当选"/*, rf.logs*/)
 					rf.TurnToLeader()
 				}
 			}
@@ -400,15 +404,15 @@ func (rf *Raft) StartApply() {
 	go func() {
 		for {
 			cmtIdx := <-rf.cmtCh //cmtIdx := int(atomic.LoadInt32(&rf.commitIndex))
+			DPrintln(rf.me, rf.currentTerm, rf.lastApplied, rf.logs[rf.lastApplied], cmtIdx, rf.logs[cmtIdx], "已应用")
 			for rf.lastApplied < cmtIdx {
 				toIdx := rf.lastApplied + 1
-				err, logEntry := rf.getLogEntry(toIdx) //rf.logs[toIdx]
+				err, logEntry := rf.getLogEntry(toIdx)
 				if err != nil {
 					DPrintln(rf.me, toIdx, "不存在", rf.logs)
 					break
 				}
 				rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
-				DPrintln(rf.me, rf.currentTerm, logEntry.Command, "已应用...")
 				rf.lastApplied = toIdx
 			}
 		}
@@ -433,11 +437,11 @@ func (rf *Raft) StartTimeOut() {
 						rf.heartbeats[idx] = 0
 					}
 					if nums <= len(rf.peers)/2 {
-						//DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
+						DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "与大部分节点断开...", nums)
 						rf.TurnToFollower(-1, rf.currentTerm)
 					}
 				} else {
-					//DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
+					DPrintln("server:", rf.me, "term:", rf.currentTerm, "timeout:", rand_timeout, "开始竞选...", rf.logs)
 					rf.TurnToCandidater()
 				}
 				break
