@@ -71,7 +71,6 @@ type Raft struct {
 
 	expCh chan bool
 	apdCh chan bool
-	cmtCh chan int
 	apyCh chan ApplyMsg
 
 	heartbeats []int
@@ -124,11 +123,7 @@ func (rf *Raft) updateServerIndex(leaderCmtIdx int32) {
 		//rf.commitIndex = leaderCmtIdx
 	}
 
-	DPrintln(rf.me, rf.commitIndex, rf.logs[rf.commitIndex], "之前的日志可以提交...")
-
-	go func(cmtIdx int32) {
-		rf.cmtCh <- int(cmtIdx)
-	}(rf.commitIndex)
+	DPrintln(rf.me, rf.commitIndex, rf.commitIndex, "之前的日志可以提交...")
 
 }
 
@@ -167,10 +162,6 @@ func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
 
 		if nums >= COUNT {
 			atomic.StoreInt32(&rf.commitIndex, int32(idx)) //rf.commitIndex = idx
-			//DPrintln(rf.me, rf.commitIndex, rf.logs[rf.commitIndex], "之前的日志可以提交...")
-			go func(cmtIdx int32) {
-				rf.cmtCh <- int(cmtIdx)
-			}(rf.commitIndex)
 			break
 		}
 	}
@@ -241,60 +232,6 @@ func (rf *Raft) getFirstIndex(pos int) int {
 	}
 	pos++
 	return pos
-}
-
-func (rf *Raft) requestVotes() {
-	lastLogIdx := len(rf.logs) - 1
-	var lastLogItem int32
-	if lastLogIdx > -1 {
-		lastLogItem = rf.logs[lastLogIdx].Term
-	}
-
-	voteArgs := &RequestVoteArgs{
-		rf.currentTerm,
-		rf.me,
-		lastLogIdx,
-		lastLogItem,
-	}
-
-	for idx, _ := range rf.peers {
-		if idx == rf.me {
-			continue
-		}
-		go func(serverIdx int) {
-			voteReply := &RequestVoteReply{}
-			DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
-			for {
-				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
-
-				if ok {
-					break
-				}
-
-				if rf.votedFor != rf.me || voteArgs.Term != rf.currentTerm {
-					return
-				}
-			}
-
-			if voteArgs.Term != rf.currentTerm {
-				return
-			}
-
-			if voteReply.Term > rf.currentTerm {
-				//rf.currentTerm = voteReply.Term
-				rf.TurnToFollower(-1, voteReply.Term)
-				return
-			}
-
-			if voteReply.VoteGranted {
-				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
-				if currentVotes == len(rf.peers)/2+1 {
-					DPrintln(rf.me, rf.currentTerm, "当选"/*, rf.logs*/)
-					rf.TurnToLeader()
-				}
-			}
-		}(idx)
-	}
 }
 
 // return currentTerm and whether this server
@@ -403,9 +340,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) StartApply() {
 	go func() {
 		for {
-			cmtIdx := <-rf.cmtCh //cmtIdx := int(atomic.LoadInt32(&rf.commitIndex))
-			DPrintln(rf.me, rf.currentTerm, rf.lastApplied, rf.logs[rf.lastApplied], cmtIdx, rf.logs[cmtIdx], "已应用")
+			t := false
+
+			cmtIdx := int(atomic.LoadInt32(&rf.commitIndex))
+
 			for rf.lastApplied < cmtIdx {
+				t = true
 				toIdx := rf.lastApplied + 1
 				err, logEntry := rf.getLogEntry(toIdx)
 				if err != nil {
@@ -415,6 +355,12 @@ func (rf *Raft) StartApply() {
 				rf.apyCh <- ApplyMsg{toIdx, logEntry.Command, false, nil}
 				rf.lastApplied = toIdx
 			}
+
+			if t {
+				DPrintln(rf.me, rf.currentTerm, rf.lastApplied, rf.logs[rf.lastApplied], cmtIdx, rf.logs[cmtIdx], "已应用")
+			}
+
+			time.Sleep(HEARTBEAT_TIMEOUT)
 		}
 	}()
 }
@@ -502,7 +448,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.apdCh = make(chan bool)
 	rf.expCh = make(chan bool)
-	rf.cmtCh = make(chan int)
 	rf.apyCh = applyCh
 
 	rf.StartTimeOut()

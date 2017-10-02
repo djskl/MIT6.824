@@ -6,12 +6,12 @@ import (
 	"time"
 )
 
-const HEARTBEAT_TIMEOUT = 50 * time.Millisecond
+const HEARTBEAT_TIMEOUT = 10 * time.Millisecond
 const ELECTION_TIMEOUT_BASE = 200
 const ELECTION_TIMEOUT_FACT = 300
 
 // Debugging
-const Debug = 0
+const Debug = 1
 
 func DPrintln(a ...interface{})  {
 	if Debug > 0 {

@@ -66,7 +66,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = true
 
 	if len(args.Items) > 0 {
-		DPrintln(rf.me, rf.currentTerm, "NEW", args.Items)
+		DPrintln(rf.me, rf.currentTerm, "NEW", args.CommitIndex, args.Term, args.Items)
 		DPrintln(rf.me, rf.currentTerm, "NOW", rf.logs)
 	}
 
@@ -113,13 +113,14 @@ func (rf *Raft) sendAppendEntries() {
 					ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
 
 					if args.Term != rf.currentTerm {
-						//DPrintln(rf.me, rf.currentTerm, "收到过期AppendEntries响应", serverIdx, args.Term)
+						DPrintln(rf.me, rf.currentTerm, "收到过期AppendEntries响应", serverIdx, args.Term)
 						break
 					}
 
 					if ok || !isLeader {
 						break
 					}
+					//time.Sleep(HEARTBEAT_TIMEOUT)
 				}
 
 				if args.Term != rf.currentTerm {
@@ -147,10 +148,10 @@ func (rf *Raft) sendAppendEntries() {
 				rf.heartbeats[serverIdx] = 1
 
 				select {
-				case logIdx := <-rf.logChs[serverIdx]:
-					if logIdx < rf.matchIndex[serverIdx] {
+				case <-rf.logChs[serverIdx]:
+					/*if logIdx < rf.matchIndex[serverIdx] {
 						time.Sleep(HEARTBEAT_TIMEOUT)
-					}
+					}*/
 					break
 				case <-time.After(HEARTBEAT_TIMEOUT):
 					break
@@ -188,7 +189,7 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	if args.Term < rf.currentTerm {
-		//DPrintln(rf.me, "(", rf.currentTerm, ")", "拒绝为", args.CandidateIdx, "(", args.Term, ")投票(1)")
+		DPrintln(rf.me, "(", rf.currentTerm, ")", "拒绝为", args.CandidateIdx, "(", args.Term, ")投票(1)")
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -196,7 +197,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	//在当前term内，已经投票后，就不能再给其他节点投票了
 	if args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateIdx {
-		//DPrintln(rf.me, "拒绝为", args.CandidateIdx, "投票(2)", rf.votedFor)
+		DPrintln(rf.me, "拒绝为", args.CandidateIdx, "投票(2)", rf.votedFor)
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -218,7 +219,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.ResetTimeOut()
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateIdx
-		//DPrintln(rf.me, "为", args.CandidateIdx, "投票")
+		DPrintln(rf.me, "为", args.CandidateIdx, "投票")
 		return
 	}
 
@@ -227,10 +228,64 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	//DPrintln(rf.me, "为", args.CandidateIdx, "投票")
+	DPrintln(rf.me, "为", args.CandidateIdx, "投票")
 	rf.ResetTimeOut()
 	reply.VoteGranted = true
 	rf.votedFor = args.CandidateIdx
+}
+
+func (rf *Raft) requestVotes() {
+	lastLogIdx := len(rf.logs) - 1
+	var lastLogItem int32
+	if lastLogIdx > -1 {
+		lastLogItem = rf.logs[lastLogIdx].Term
+	}
+
+	voteArgs := &RequestVoteArgs{
+		rf.currentTerm,
+		rf.me,
+		lastLogIdx,
+		lastLogItem,
+	}
+
+	for idx, _ := range rf.peers {
+		if idx == rf.me {
+			continue
+		}
+		go func(serverIdx int) {
+			voteReply := &RequestVoteReply{}
+			DPrintln(rf.me, rf.currentTerm, "请求", serverIdx, "投票")
+			for {
+				ok := rf.sendRequestVote(serverIdx, voteArgs, voteReply)
+
+				if ok {
+					break
+				}
+
+				if rf.votedFor != rf.me || voteArgs.Term != rf.currentTerm {
+					return
+				}
+			}
+
+			if voteArgs.Term != rf.currentTerm {
+				return
+			}
+
+			if voteReply.Term > rf.currentTerm {
+				//rf.currentTerm = voteReply.Term
+				rf.TurnToFollower(-1, voteReply.Term)
+				return
+			}
+
+			if voteReply.VoteGranted {
+				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
+				if currentVotes == len(rf.peers)/2+1 {
+					DPrintln(rf.me, rf.currentTerm, "当选"/*, rf.logs*/)
+					rf.TurnToLeader()
+				}
+			}
+		}(idx)
+	}
 }
 
 //
