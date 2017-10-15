@@ -1,8 +1,8 @@
 package raft
 
 import (
-	"time"
 	"sync/atomic"
+	"time"
 )
 
 type AppendEntriesArgs struct {
@@ -63,6 +63,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.addLogEntries(args.Items)
 	}
 
+	reply.NextIndex = len(rf.logs)
 	reply.Success = true
 
 	if len(args.Items) > 0 {
@@ -73,9 +74,37 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.updateServerIndex(args.CommitIndex)
 }
 
-func (rf *Raft) sendAppendEntries() {
+func (rf *Raft) startHeartBeat()  {
 
-	isLeader := true
+	for server, _ := range rf.peers {
+		if server == rf.me {continue}
+
+		if int(rf.votes) <= len(rf.peers)/2 {return}
+
+		go func(serverIdx int) {
+			args := &AppendEntriesArgs{
+				Term:rf.currentTerm,
+				LeaderID:rf.me,
+				CommitIndex:rf.commitIndex,
+			}
+			reply := &AppendEntriesReply{}
+			ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+
+			if ok {
+				if reply.Term > rf.currentTerm {
+					rf.TurnToFollower(-1, reply.Term)
+					return
+				}
+			}
+
+		}(server)
+
+		time.Sleep(HEARTBEAT_TIMEOUT*time.Millisecond)
+
+	}
+}
+
+func (rf *Raft) sendAppendEntries() {
 
 	for server, _ := range rf.peers {
 
@@ -84,78 +113,50 @@ func (rf *Raft) sendAppendEntries() {
 		}
 
 		go func(serverIdx int) {
-			var preLogTerm int32
-			for isLeader {
-				nx := rf.nextIndex[serverIdx]
-				px := nx - 1
 
-				toEntries := []Entry{}
-				if len(rf.logs) > nx {
-					toEntries = rf.getLogEntries(nx) //toEntries = rf.logs[nx:]
+			nx := rf.nextIndex[serverIdx]
+
+			toEntries := []Entry{}
+			if len(rf.logs) > nx {
+				toEntries = rf.getLogEntries(nx)
+			}
+
+			px := nx - 1
+			err, preLog := rf.getLogEntry(px)
+
+			var preLogTerm int32 = 0
+			if err == nil {
+				preLogTerm = preLog.Term
+			}
+
+			args := &AppendEntriesArgs{
+				rf.currentTerm,
+				toEntries,
+				preLogTerm,
+				px,
+				rf.me,
+				rf.commitIndex,
+			}
+
+			reply := &AppendEntriesReply{}
+
+			ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
+
+			if ok {
+				if args.Term != rf.currentTerm || int(rf.votes) <= len(rf.peers)/2 {
+					return
 				}
-
-				err, preLog := rf.getLogEntry(px)
-				if err == nil {
-					preLogTerm = preLog.Term
-				}
-
-				args := &AppendEntriesArgs{
-					rf.currentTerm,
-					toEntries,
-					preLogTerm,
-					px,
-					rf.me,
-					rf.commitIndex,
-				}
-
-				reply := &AppendEntriesReply{}
-				for isLeader {
-					ok := rf.peers[serverIdx].Call("Raft.AppendEntries", args, reply)
-
-					if args.Term != rf.currentTerm {
-						DPrintln(rf.me, rf.currentTerm, "收到过期AppendEntries响应", serverIdx, args.Term)
-						break
-					}
-
-					if ok || !isLeader {
-						break
-					}
-					//time.Sleep(HEARTBEAT_TIMEOUT)
-				}
-
-				if args.Term != rf.currentTerm {
-					if int(rf.votes) <= len(rf.peers)/2 {
-						isLeader = false
-					}
-					continue
-				}
-
-				if reply.Success {
-					rf.updateLeaderIndex(serverIdx, len(toEntries))
+				if reply.Success && reply.NextIndex > rf.nextIndex[serverIdx] {
+					rf.nextIndex[serverIdx] = reply.NextIndex
+					rf.updateLeaderIndex(serverIdx, reply.NextIndex)
 				} else {
 					if rf.currentTerm < reply.Term {
-						isLeader = false
 						rf.TurnToFollower(-1, reply.Term)
 						return
 					}
-					if int(rf.votes) <= len(rf.peers)/2 {
-						isLeader = false
-						continue
-					}
-					rf.nextIndex[serverIdx] = reply.NextIndex //rf.nextIndex[serverIdx] = rf.nextIndex[serverIdx] - 1
+					rf.nextIndex[serverIdx] = reply.NextIndex
 				}
-
 				rf.heartbeats[serverIdx] = 1
-
-				select {
-				case <-rf.logChs[serverIdx]:
-					/*if logIdx < rf.matchIndex[serverIdx] {
-						time.Sleep(HEARTBEAT_TIMEOUT)
-					}*/
-					break
-				case <-time.After(HEARTBEAT_TIMEOUT):
-					break
-				}
 			}
 		}(server)
 	}
@@ -272,7 +273,6 @@ func (rf *Raft) requestVotes() {
 			}
 
 			if voteReply.Term > rf.currentTerm {
-				//rf.currentTerm = voteReply.Term
 				rf.TurnToFollower(-1, voteReply.Term)
 				return
 			}
@@ -280,7 +280,7 @@ func (rf *Raft) requestVotes() {
 			if voteReply.VoteGranted {
 				currentVotes := int(atomic.AddInt32(&rf.votes, 1))
 				if currentVotes == len(rf.peers)/2+1 {
-					DPrintln(rf.me, rf.currentTerm, "当选"/*, rf.logs*/)
+					DPrintln(rf.me, rf.currentTerm, "当选" /*, rf.logs*/)
 					rf.TurnToLeader()
 				}
 			}

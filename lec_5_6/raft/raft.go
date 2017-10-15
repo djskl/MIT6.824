@@ -74,7 +74,6 @@ type Raft struct {
 	apyCh chan ApplyMsg
 
 	heartbeats []int
-	logChs     []chan int
 }
 
 func (rf *Raft) TurnToLeader() {
@@ -89,7 +88,8 @@ func (rf *Raft) TurnToLeader() {
 
 	rf.persist()
 
-	rf.sendAppendEntries()
+	rf.startHeartBeat()
+
 }
 
 func (rf *Raft) TurnToCandidater() {
@@ -117,29 +117,17 @@ func (rf *Raft) updateServerIndex(leaderCmtIdx int32) {
 
 	if cmtIdx > logNums {
 		atomic.StoreInt32(&rf.commitIndex, int32(logNums-1))
-		//rf.commitIndex = size - 1
 	} else {
 		atomic.StoreInt32(&rf.commitIndex, int32(leaderCmtIdx))
-		//rf.commitIndex = leaderCmtIdx
 	}
 
 	DPrintln(rf.me, rf.commitIndex, rf.commitIndex, "之前的日志可以提交...")
 
 }
 
-func (rf *Raft) updateLeaderIndex(serverIdx int, logNum int) {
+func (rf *Raft) updateLeaderIndex(serverIdx int, nxtIdx int) {
 
-	if logNum < 1 {
-		return
-	}
-
-	if rf.nextIndex[serverIdx]+logNum > len(rf.logs) {
-		rf.nextIndex[serverIdx] = len(rf.logs)
-	} else {
-		rf.nextIndex[serverIdx] += logNum //atomic.AddInt32(&rf.nextIndex[serverIdx], int32(size))
-	}
-
-	rf.matchIndex[serverIdx] = rf.nextIndex[serverIdx] - 1 //atomic.StoreInt32(&rf.matchIndex[serverIdx], int32(idx))
+	rf.matchIndex[serverIdx] = rf.nextIndex[serverIdx] - 1
 
 	for idx := rf.matchIndex[serverIdx]; idx > -1; idx-- {
 
@@ -323,14 +311,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	index = rf.addLogEntry(logEntry)
 
-	for idx := 0; idx < len(rf.peers); idx++ {
-		if idx == rf.me {
-			continue
-		}
-		go func(serverIdx int) {
-			rf.logChs[serverIdx] <- index
-		}(idx)
-	}
+	rf.sendAppendEntries()
 
 	DPrintln(rf.me, rf.currentTerm, "Get Command:", index, command)
 
@@ -435,12 +416,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
-	rf.logChs = make([]chan int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.nextIndex = make([]int, len(rf.peers))
 	for idx := 0; idx < len(rf.peers); idx++ {
 		rf.nextIndex[idx] = 1
-		rf.logChs[idx] = make(chan int)
 	}
 
 	rf.heartbeats = make([]int, len(rf.peers))
